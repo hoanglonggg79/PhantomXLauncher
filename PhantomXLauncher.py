@@ -12,6 +12,10 @@ from pathlib import Path
 from typing import Optional, List, Dict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+if getattr(sys, "frozen", False):
+    import multiprocessing
+    multiprocessing.freeze_support()
+
 # ── Third-party ────────────────────────────────────────────────────────────────
 try:
     from PyQt6.QtWidgets import (
@@ -76,12 +80,20 @@ APP_AUTHOR  = "PhantomXTeam"
 KEYRING_SVC = "PhantomXLauncher"
 WATERMARK   = "Maintained by HoangLong ❤️ 🇻🇳"
 
+# ── Resolve base directory (works both frozen & normal) ────────────────────────
+if getattr(sys, "frozen", False):
+    _APP_BASE = Path(sys.executable).parent
+else:
+    _APP_BASE = Path(__file__).parent
+
 BASE_DIR    = Path(user_data_dir(APP_NAME, APP_AUTHOR))
 LOG_DIR     = BASE_DIR / "logs"
 INST_DIR    = BASE_DIR / "instances"
 CONFIG_FILE = BASE_DIR / "config.json"
-THEME_DIR   = Path("./theme")
+
+THEME_DIR   = _APP_BASE / "theme"
 MUSIC_FILE  = THEME_DIR / "music.mp3"
+ICON_FILE   = _APP_BASE / "icon.ico"
 
 for _d in [BASE_DIR, LOG_DIR, INST_DIR]:
     _d.mkdir(parents=True, exist_ok=True)
@@ -89,10 +101,15 @@ for _d in [BASE_DIR, LOG_DIR, INST_DIR]:
 LOG_FILE = LOG_DIR / f"phantomx_{datetime.now():%Y%m%d_%H%M%S}.log"
 
 logger.remove()
-logger.add(sys.stderr, level="DEBUG", colorize=True,
-           format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | {message}")
-logger.add(LOG_FILE, level="DEBUG", rotation="10 MB", retention="14 days",
-           format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {module}:{line} | {message}")
+logger.add(
+    sys.stderr, level="DEBUG", colorize=True,
+    format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | {message}"
+)
+logger.add(
+    LOG_FILE, level="DEBUG", rotation="10 MB", retention="14 days",
+    encoding="utf-8",                       
+    format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {module}:{line} | {message}"
+)
 
 logger.info(f"PhantomX {APP_VERSION} starting — log: {LOG_FILE}")
 
@@ -102,7 +119,6 @@ logger.info(f"PhantomX {APP_VERSION} starting — log: {LOG_FILE}")
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class Instance:
-    """Represents one isolated game installation."""
 
     def __init__(self, name: str, version_id: str, loader: str = "vanilla",
                  loader_version: str = "", game_dir: str = ""):
@@ -140,13 +156,15 @@ class Instance:
 
     def save(self):
         self.instance_dir.mkdir(parents=True, exist_ok=True)
-        self.config_path.write_text(json.dumps(self.to_dict(), indent=2))
+        self.config_path.write_text(
+            json.dumps(self.to_dict(), indent=2), encoding="utf-8" 
+        )
         logger.debug(f"Instance saved: {self.name}")
 
     @classmethod
     def load(cls, path: Path) -> Optional["Instance"]:
         try:
-            return cls.from_dict(json.loads(path.read_text()))
+            return cls.from_dict(json.loads(path.read_text(encoding="utf-8")))
         except Exception as e:
             logger.error(f"Failed to load instance {path}: {e}")
             return None
@@ -157,8 +175,8 @@ class Instance:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class Signals(QObject):
-    log         = pyqtSignal(str, str)        # (message, level)
-    progress    = pyqtSignal(int, int, str)   # (current, total, label)
+    log         = pyqtSignal(str, str)        
+    progress    = pyqtSignal(int, int, str)   
     java_status = pyqtSignal(bool, str)
     versions_ok = pyqtSignal(list)
     dl_done     = pyqtSignal(bool, str)
@@ -179,12 +197,22 @@ class MinecraftManager:
     MODRINTH_SEARCH  = "https://api.modrinth.com/v2/search"
     MODRINTH_VERSION = "https://api.modrinth.com/v2/project/{id}/version"
     CURSEFORGE_SEARCH = "https://api.curseforge.com/v1/mods/search"
-    CURSEFORGE_KEY    = ""   # Set your CurseForge API key here or via env CF_API_KEY
+    CURSEFORGE_KEY    = ""  
+
+    _session: Optional[requests.Session] = None
 
     def __init__(self, game_dir: str = ""):
         self.game_dir = game_dir or str(BASE_DIR / "default")
         Path(self.game_dir).mkdir(parents=True, exist_ok=True)
         self._cf_key = os.environ.get("CF_API_KEY", self.CURSEFORGE_KEY)
+
+    @property
+    def session(self) -> requests.Session:
+        if MinecraftManager._session is None:
+            s = requests.Session()
+            s.headers.update({"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+            MinecraftManager._session = s
+        return MinecraftManager._session
 
     # ── Java ──────────────────────────────────────────────────────────────────
     def find_java(self) -> Optional[str]:
@@ -215,7 +243,8 @@ class MinecraftManager:
         try:
             r = subprocess.run(
                 [java_path, "-version"],
-                capture_output=True, text=True, timeout=5
+                capture_output=True, text=True, timeout=5,
+                encoding="utf-8", errors="replace"   
             )
             out = (r.stderr + r.stdout).lower()
             import re
@@ -370,7 +399,7 @@ class MinecraftManager:
     def get_fabric_loaders(self, mc_version: str) -> list:
         try:
             url = self.FABRIC_META.format(mc_version=mc_version)
-            r = requests.get(url, timeout=10)
+            r = self.session.get(url, timeout=10)
             r.raise_for_status()
             return [entry["loader"]["version"] for entry in r.json()]
         except Exception as e:
@@ -379,7 +408,7 @@ class MinecraftManager:
 
     def get_forge_versions(self, mc_version: str) -> list:
         try:
-            r = requests.get(self.FORGE_MAVEN, timeout=10)
+            r = self.session.get(self.FORGE_MAVEN, timeout=10)
             r.raise_for_status()
             data = r.json().get("promos", {})
             versions = []
@@ -394,7 +423,6 @@ class MinecraftManager:
     # ── Mod Marketplace: Modrinth ─────────────────────────────────────────────
     def search_modrinth(self, query: str, mc_version: str = "",
                         loader: str = "", limit: int = 20) -> List[Dict]:
-        """Search Modrinth for mods/modpacks."""
         try:
             facets = [['project_type:mod']]
             if mc_version:
@@ -407,12 +435,9 @@ class MinecraftManager:
                 "limit": limit,
                 "facets": json.dumps(facets),
             }
-            headers = {"User-Agent": f"{APP_NAME}/{APP_VERSION} (contact@phantomx.dev)"}
-            r = requests.get(self.MODRINTH_SEARCH, params=params,
-                             headers=headers, timeout=10)
+            r = self.session.get(self.MODRINTH_SEARCH, params=params, timeout=10)
             r.raise_for_status()
-            data = r.json()
-            return data.get("hits", [])
+            return r.json().get("hits", [])
         except Exception as e:
             logger.warning(f"search_modrinth: {e}")
             return []
@@ -427,8 +452,7 @@ class MinecraftManager:
                 params["game_versions"] = json.dumps([mc_version])
             if loader and loader != "vanilla":
                 params["loaders"] = json.dumps([loader])
-            headers = {"User-Agent": f"{APP_NAME}/{APP_VERSION}"}
-            r = requests.get(url, params=params, headers=headers, timeout=10)
+            r = self.session.get(url, params=params, timeout=10)
             r.raise_for_status()
             return r.json()
         except Exception as e:
@@ -437,15 +461,13 @@ class MinecraftManager:
 
     def download_mod(self, url: str, filename: str, mods_dir: Path,
                      cb_progress=None, cb_log=None) -> bool:
-        """Download a mod file with progress reporting."""
         try:
             mods_dir.mkdir(parents=True, exist_ok=True)
             dest = mods_dir / filename
             if cb_log:
                 cb_log(f"⬇️  Downloading {filename}…")
 
-            headers = {"User-Agent": f"{APP_NAME}/{APP_VERSION}"}
-            r = requests.get(url, headers=headers, stream=True, timeout=30)
+            r = self.session.get(url, stream=True, timeout=30)
             r.raise_for_status()
 
             total = int(r.headers.get("content-length", 0))
@@ -497,6 +519,8 @@ class MinecraftManager:
             "-XX:+PerfDisableSharedMem",
             "-XX:MaxTenuringThreshold=1",
             "-Dusing.aikars.flags=https://mcflags.emc.gs",
+            "-Dfile.encoding=UTF-8",            
+            "-Dstdout.encoding=UTF-8",          
         ]
         if extra_jvm:
             jvm_args += extra_jvm.split()
@@ -538,7 +562,10 @@ class MinecraftManager:
                     pass
         crash_dir = base / "crash-reports"
         if crash_dir.exists():
-            crashes = sorted(crash_dir.glob("*.txt"), key=lambda f: f.stat().st_mtime, reverse=True)
+            crashes = sorted(
+                crash_dir.glob("*.txt"),
+                key=lambda f: f.stat().st_mtime, reverse=True
+            )
             for old in crashes[10:]:
                 try:
                     old.unlink()
@@ -692,7 +719,8 @@ class LaunchWorker(QThread):
                 cwd=inst.game_dir,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True,
+                encoding="utf-8",           
+                errors="replace",           
                 bufsize=1,
             )
             if platform.system() == "Windows":
@@ -759,7 +787,6 @@ class LaunchWorker(QThread):
 
 
 class ModSearchWorker(QThread):
-    """Async Modrinth search worker — keeps UI responsive."""
     results_ready = pyqtSignal(list)
     error         = pyqtSignal(str)
 
@@ -782,7 +809,6 @@ class ModSearchWorker(QThread):
 
 
 class ModDownloadWorker(QThread):
-    """Downloads a mod file in background."""
     done = pyqtSignal(bool, str)
     log  = pyqtSignal(str)
     prog = pyqtSignal(int, int, str)
@@ -809,7 +835,6 @@ class ModDownloadWorker(QThread):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class MusicPlayerWidget(QWidget):
-    """Compact music player that loads ./theme/music.mp3."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -827,25 +852,21 @@ class MusicPlayerWidget(QWidget):
         layout.setContentsMargins(8, 2, 8, 2)
         layout.setSpacing(6)
 
-        # Music icon label
         icon_lbl = QLabel("🎵")
         icon_lbl.setFixedWidth(20)
         layout.addWidget(icon_lbl)
 
-        # Track name
         self.track_lbl = QLabel("No music")
         self.track_lbl.setObjectName("subtitle")
         self.track_lbl.setMaximumWidth(160)
         layout.addWidget(self.track_lbl)
 
-        # Play/Pause button
-        self.play_btn = QPushButton("▶")
+        self.play_btn = QPushButton("▶️")
         self.play_btn.setFixedSize(28, 28)
         self.play_btn.setToolTip("Play / Pause")
         self.play_btn.clicked.connect(self._toggle_play)
         layout.addWidget(self.play_btn)
 
-        # Volume slider
         self.vol_slider = QSlider(Qt.Orientation.Horizontal)
         self.vol_slider.setRange(0, 100)
         self.vol_slider.setValue(40)
@@ -854,14 +875,12 @@ class MusicPlayerWidget(QWidget):
         self.vol_slider.valueChanged.connect(self._on_volume_changed)
         layout.addWidget(self.vol_slider)
 
-        # Mute button
-        self.mute_btn = QPushButton("🔊")
+        self.mute_btn = QPushButton("🔇")
         self.mute_btn.setFixedSize(28, 28)
         self.mute_btn.setCheckable(True)
         self.mute_btn.clicked.connect(self._toggle_mute)
         layout.addWidget(self.mute_btn)
 
-        # Apply initial volume
         self._audio_out.setVolume(0.40)
 
     def _load_music(self):
@@ -870,6 +889,7 @@ class MusicPlayerWidget(QWidget):
             self._player.setSource(url)
             self.track_lbl.setText(MUSIC_FILE.stem)
             logger.info(f"Music loaded: {MUSIC_FILE}")
+
         else:
             self.track_lbl.setText("theme/music.mp3 missing")
             self.play_btn.setEnabled(False)
@@ -884,12 +904,14 @@ class MusicPlayerWidget(QWidget):
 
     def _on_playback_changed(self, state):
         if state == QMediaPlayer.PlaybackState.PlayingState:
-            self.play_btn.setText("⏸")
+            self.play_btn.setText("🔇")
         else:
-            self.play_btn.setText("▶")
+            self.play_btn.setText("▶️")
 
     def _on_status_changed(self, status):
-        if status == QMediaPlayer.MediaStatus.EndOfMedia and self._looping:
+        if status == QMediaPlayer.MediaStatus.LoadedMedia:
+            self._player.play()
+        elif status == QMediaPlayer.MediaStatus.EndOfMedia and self._looping:
             self._player.setPosition(0)
             self._player.play()
 
@@ -914,12 +936,14 @@ class MusicPlayerWidget(QWidget):
         }
 
     def load_state(self, cfg: dict):
-        vol = int(cfg.get("music_volume", 40))
+        vol   = int(cfg.get("music_volume", 40))
         muted = bool(cfg.get("music_muted", False))
         self.vol_slider.setValue(vol)
         self.mute_btn.setChecked(muted)
         self._audio_out.setMuted(muted)
         self.mute_btn.setText("🔇" if muted else "🔊")
+        # If muted on startup, the auto-play will still start but be silent.
+        # Volume is already applied before play() fires via _on_status_changed.
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -938,8 +962,10 @@ QPushButton:pressed { background: #89dceb; }
 QPushButton:disabled { background: #45475a; color: #6c7086; }
 QPushButton#danger { background: #f38ba8; }
 QPushButton#danger:hover { background: #eba0ac; }
+QPushButton#danger:disabled { background: #45475a; color: #6c7086; }
 QPushButton#success { background: #a6e3a1; }
 QPushButton#success:hover { background: #94e2d5; }
+QPushButton#success:disabled { background: #45475a; color: #6c7086; }
 QPushButton#market { background: #cba6f7; color: #1e1e2e; }
 QPushButton#market:hover { background: #b4befe; }
 QLineEdit, QComboBox, QSpinBox { background: #313244; border: 1px solid #45475a; border-radius: 5px; padding: 5px 8px; color: #cdd6f4; }
@@ -1115,6 +1141,7 @@ class NewInstanceDialog(QDialog):
         self.setWindowTitle("New Instance")
         self.setMinimumWidth(420)
         self.mgr = MinecraftManager()
+        self._fetcher = None 
         self._build_ui()
         self._load_versions()
 
@@ -1187,6 +1214,11 @@ class NewInstanceDialog(QDialog):
         self._refresh_loader_versions(loader, mc_ver)
 
     def _refresh_loader_versions(self, loader: str, mc_ver: str):
+        # Stop any previous fetcher before starting a new one
+        if self._fetcher and self._fetcher.isRunning():
+            self._fetcher.quit()
+            self._fetcher.wait(500)
+
         self.lver_combo.clear()
         self.lver_combo.setEnabled(False)
         self.lver_combo.setPlaceholderText("Loading…")
@@ -1198,8 +1230,8 @@ class NewInstanceDialog(QDialog):
 
             def __init__(self, loader, mc_ver):
                 super().__init__()
-                self._loader  = loader
-                self._mc_ver  = mc_ver
+                self._loader = loader
+                self._mc_ver = mc_ver
 
             def run(self):
                 if self._loader == "fabric":
@@ -1210,10 +1242,9 @@ class NewInstanceDialog(QDialog):
                     versions = []
                 self.result.emit(versions[:20])
 
-        fetcher = _Fetcher(loader, mc_ver)
-        fetcher.result.connect(self._on_loader_versions_fetched)
-        self._fetcher = fetcher
-        fetcher.start()
+        self._fetcher = _Fetcher(loader, mc_ver)
+        self._fetcher.result.connect(self._on_loader_versions_fetched)
+        self._fetcher.start()
 
     @pyqtSlot(list)
     def _on_loader_versions_fetched(self, versions: list):
@@ -1242,7 +1273,6 @@ class NewInstanceDialog(QDialog):
 
 
 class ModTab(QWidget):
-    """Mod manager for the selected instance."""
 
     def __init__(self, mgr: MinecraftManager, parent=None):
         super().__init__(parent)
@@ -1379,9 +1409,8 @@ class ModTab(QWidget):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class MarketplaceTab(QWidget):
-    """Browse & download mods/modpacks from Modrinth directly inside the launcher."""
 
-    install_signal = pyqtSignal(str)   # emits log message
+    install_signal = pyqtSignal(str)
 
     def __init__(self, mgr: MinecraftManager, inst_tab, parent=None):
         super().__init__(parent)
@@ -1390,12 +1419,14 @@ class MarketplaceTab(QWidget):
         self._results: List[Dict] = []
         self._search_worker: Optional[ModSearchWorker] = None
         self._dl_worker: Optional[ModDownloadWorker] = None
+        self._ver_fetcher = None           # keep reference to avoid GC
+        self._current_mod: Optional[Dict] = None
+        self._mod_versions: List[Dict] = []
         self._build_ui()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
 
-        # ── Header ────────────────────────────────────────────────────────────
         h = QHBoxLayout()
         lbl = QLabel("🛒 Mod Marketplace")
         lbl.setObjectName("header")
@@ -1406,7 +1437,6 @@ class MarketplaceTab(QWidget):
         h.addWidget(modrinth_lbl)
         layout.addLayout(h)
 
-        # ── Search bar ────────────────────────────────────────────────────────
         search_grp = QGroupBox("Search")
         sg = QHBoxLayout(search_grp)
 
@@ -1419,7 +1449,6 @@ class MarketplaceTab(QWidget):
         self.mc_ver_filter.setEditable(True)
         self.mc_ver_filter.setPlaceholderText("MC Version (any)")
         self.mc_ver_filter.setMinimumWidth(120)
-        # populate common versions
         for v in ["1.21.4", "1.21.1", "1.20.4", "1.20.1", "1.19.4",
                   "1.19.2", "1.18.2", "1.16.5"]:
             self.mc_ver_filter.addItem(v)
@@ -1437,24 +1466,21 @@ class MarketplaceTab(QWidget):
 
         layout.addWidget(search_grp)
 
-        # ── Results + Detail split ────────────────────────────────────────────
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # Results list
         self.result_list = QListWidget()
         self.result_list.currentItemChanged.connect(self._on_result_selected)
         splitter.addWidget(self.result_list)
 
-        # Detail panel
         detail_widget = QWidget()
         detail_layout = QVBoxLayout(detail_widget)
 
-        self.detail_name   = QLabel("Select a mod to see details")
+        self.detail_name = QLabel("Select a mod to see details")
         self.detail_name.setObjectName("header")
         self.detail_name.setWordWrap(True)
         detail_layout.addWidget(self.detail_name)
 
-        self.detail_desc   = QTextEdit()
+        self.detail_desc = QTextEdit()
         self.detail_desc.setReadOnly(True)
         self.detail_desc.setMaximumHeight(160)
         detail_layout.addWidget(self.detail_desc)
@@ -1469,7 +1495,6 @@ class MarketplaceTab(QWidget):
         info_row.addWidget(self.detail_dl_count)
         detail_layout.addLayout(info_row)
 
-        # Version selector
         ver_row = QHBoxLayout()
         ver_row.addWidget(QLabel("Version:"))
         self.ver_combo = QComboBox()
@@ -1477,14 +1502,12 @@ class MarketplaceTab(QWidget):
         ver_row.addWidget(self.ver_combo)
         detail_layout.addLayout(ver_row)
 
-        # Install target instance
         inst_row = QHBoxLayout()
         inst_row.addWidget(QLabel("Install to:"))
         self.inst_combo = QComboBox()
         inst_row.addWidget(self.inst_combo)
         detail_layout.addLayout(inst_row)
 
-        # Download progress
         self.dl_progress = QProgressBar()
         self.dl_progress.setVisible(False)
         detail_layout.addWidget(self.dl_progress)
@@ -1493,7 +1516,6 @@ class MarketplaceTab(QWidget):
         self.dl_status.setObjectName("subtitle")
         detail_layout.addWidget(self.dl_status)
 
-        # Buttons
         btn_row = QHBoxLayout()
         self.download_btn = QPushButton("⬇️  Install Mod")
         self.download_btn.setObjectName("market")
@@ -1512,15 +1534,13 @@ class MarketplaceTab(QWidget):
         splitter.setSizes([350, 450])
         layout.addWidget(splitter)
 
-        # Progress bar at bottom
         self.search_progress = QProgressBar()
-        self.search_progress.setRange(0, 0)   # indeterminate
+        self.search_progress.setRange(0, 0)
         self.search_progress.setVisible(False)
         self.search_progress.setMaximumHeight(6)
         layout.addWidget(self.search_progress)
 
     def refresh_instances(self):
-        """Called when instance list changes — update install-target combo."""
         current = self.inst_combo.currentText()
         self.inst_combo.clear()
         for name in self.inst_tab.instances:
@@ -1534,13 +1554,13 @@ class MarketplaceTab(QWidget):
         if not query:
             return
 
-        # Cancel previous search
         if self._search_worker and self._search_worker.isRunning():
-            self._search_worker.terminate()
+            self._search_worker.quit()
+            self._search_worker.wait(500)
 
-        mc_ver  = self.mc_ver_filter.currentText().strip()
-        loader  = self.loader_filter.currentText()
-        loader  = "" if loader == "any loader" else loader
+        mc_ver = self.mc_ver_filter.currentText().strip()
+        loader = self.loader_filter.currentText()
+        loader = "" if loader == "any loader" else loader
 
         self.result_list.clear()
         self._results.clear()
@@ -1563,14 +1583,13 @@ class MarketplaceTab(QWidget):
             return
 
         for mod in results:
-            title       = mod.get("title", "Unknown")
-            author      = mod.get("author", "")
-            downloads   = mod.get("downloads", 0)
-            categories  = ", ".join(mod.get("categories", [])[:3])
-            versions    = ", ".join(mod.get("versions", [])[-3:])  # latest 3 mc versions
-            dl_fmt      = f"{downloads:,}"
+            title      = mod.get("title", "Unknown")
+            author     = mod.get("author", "")
+            downloads  = mod.get("downloads", 0)
+            categories = ", ".join(mod.get("categories", [])[:3])
+            dl_fmt     = f"{downloads:,}"
             item = QListWidgetItem(
-                f"{'📦'if 'mod' in mod.get('project_type','') else '🧩'}  {title}"
+                f"{'📦' if 'mod' in mod.get('project_type','') else '🧩'}  {title}"
                 f"\n    by {author}  •  ⬇ {dl_fmt}  •  {categories}"
             )
             item.setData(Qt.ItemDataRole.UserRole, mod)
@@ -1600,11 +1619,15 @@ class MarketplaceTab(QWidget):
         self.ver_combo.clear()
         self.ver_combo.addItem("Loading versions…")
 
-        # Fetch versions async
         project_id = mod.get("project_id", mod.get("slug", ""))
         mc_ver = self.mc_ver_filter.currentText().strip()
         loader = self.loader_filter.currentText()
         loader = "" if loader == "any loader" else loader
+
+        # Stop any previous fetcher
+        if self._ver_fetcher and self._ver_fetcher.isRunning():
+            self._ver_fetcher.quit()
+            self._ver_fetcher.wait(500)
 
         class _VerFetcher(QThread):
             done = pyqtSignal(list)
@@ -1646,14 +1669,12 @@ class MarketplaceTab(QWidget):
         if not ver_data:
             return
 
-        # Pick first primary file
         files = ver_data.get("files", [])
         if not files:
             QMessageBox.warning(self, "No File", "No downloadable file found.")
             return
 
-        # Prefer primary file
-        primary = next((f for f in files if f.get("primary")), files[0])
+        primary  = next((f for f in files if f.get("primary")), files[0])
         url      = primary.get("url", "")
         filename = primary.get("filename", "mod.jar")
 
@@ -1663,7 +1684,6 @@ class MarketplaceTab(QWidget):
             QMessageBox.warning(self, "Instance Not Found", "Instance not found.")
             return
 
-        # Check if already exists
         dest = inst.mods_dir / filename
         if dest.exists():
             reply = QMessageBox.question(
@@ -1705,7 +1725,7 @@ class MarketplaceTab(QWidget):
             self.dl_status.setText(f"❌ Download failed: {filename}")
 
     def _open_web(self):
-        if not hasattr(self, "_current_mod"):
+        if not self._current_mod:
             return
         slug = self._current_mod.get("slug", "")
         if slug:
@@ -1891,7 +1911,10 @@ class SettingsTab(QWidget):
     def save(self) -> bool:
         self.config.update(self._read_ui())
         try:
-            CONFIG_FILE.write_text(json.dumps(self.config, indent=2), encoding="utf-8")
+            CONFIG_FILE.write_text(
+                json.dumps(self.config, indent=2, ensure_ascii=False),
+                encoding="utf-8"
+            )
             if KEYRING_AVAILABLE:
                 keyring.set_password(KEYRING_SVC, "username", self.config["username"])
             logger.info("Settings saved")
@@ -1948,6 +1971,12 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"PhantomX Launcher  v{APP_VERSION}")
         self.setMinimumSize(960, 680)
 
+        if ICON_FILE.exists():
+            self.setWindowIcon(QIcon(str(ICON_FILE)))
+            logger.info(f"Icon loaded: {ICON_FILE}")
+        else:
+            logger.warning(f"icon.ico not found at {ICON_FILE}")
+
         self.mgr              = MinecraftManager()
         self.signals          = Signals()
         self.install_worker:  Optional[InstallWorker] = None
@@ -1964,7 +1993,6 @@ class MainWindow(QMainWindow):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
 
-        # Watermark permanent widget in status bar (right side)
         wm_lbl = QLabel(f"  {WATERMARK}  ")
         wm_lbl.setObjectName("watermark")
         self.status_bar.addPermanentWidget(wm_lbl)
@@ -1991,7 +2019,6 @@ class MainWindow(QMainWindow):
         tl.addWidget(sub)
         tl.addStretch()
 
-        # Music player embedded in top bar
         self.music_player = MusicPlayerWidget()
         tl.addWidget(self.music_player)
 
@@ -2002,15 +2029,17 @@ class MainWindow(QMainWindow):
         self.quick_inst_combo.setMinimumWidth(160)
         tl.addWidget(self.quick_inst_combo)
 
+        # ── FIX: correct initial enabled state ───────────────────────────────
         self.launch_btn = QPushButton("🎮 Launch")
         self.launch_btn.setObjectName("success")
+        self.launch_btn.setEnabled(True)
         self.launch_btn.clicked.connect(self._quick_launch)
         tl.addWidget(self.launch_btn)
 
         self.stop_btn = QPushButton("⏹ Stop")
         self.stop_btn.setObjectName("danger")
-        self.stop_btn.clicked.connect(self._stop_game)
         self.stop_btn.setEnabled(False)
+        self.stop_btn.clicked.connect(self._stop_game)
         tl.addWidget(self.stop_btn)
 
         root.addWidget(topbar)
@@ -2059,7 +2088,6 @@ class MainWindow(QMainWindow):
         self.inst_tab.request_launch.connect(self._launch_instance)
         self.inst_tab.list_widget.itemSelectionChanged.connect(self._on_inst_selection_changed)
 
-        # Marketplace install log → main log
         self.market_tab.install_signal.connect(
             lambda m: self.signals.log.emit(m, "SUCCESS")
         )
@@ -2089,7 +2117,6 @@ class MainWindow(QMainWindow):
         idx = self.quick_inst_combo.findText(current)
         if idx >= 0:
             self.quick_inst_combo.setCurrentIndex(idx)
-        # Also refresh marketplace instance list
         self.market_tab.refresh_instances()
 
     # ── Java check ────────────────────────────────────────────────────────────
@@ -2195,8 +2222,10 @@ class MainWindow(QMainWindow):
                 return
 
         self.signals.log.emit(f"🚀 Launching '{inst.name}' as {username}…", "INFO")
-        self.launch_btn.setEnabled(False)
-        self.stop_btn.setEnabled(True)
+
+        # ── FIX: correct button state when game starts ─────────────────────
+        self.launch_btn.setEnabled(False)   # can't launch twice
+        self.stop_btn.setEnabled(True)      # can now stop
         self.status_bar.showMessage(f"🎮 Playing: {inst.name}")
 
         inst.last_played = datetime.now().isoformat()
@@ -2222,8 +2251,9 @@ class MainWindow(QMainWindow):
             self.launch_worker.terminate()
 
     def _on_game_exited(self, rc: int):
-        self.launch_btn.setEnabled(True)
-        self.stop_btn.setEnabled(False)
+        # ── FIX: correct button state when game exits ──────────────────────
+        self.launch_btn.setEnabled(True)    # ready to launch again
+        self.stop_btn.setEnabled(False)     # nothing to stop
         self.launch_worker = None
         self.status_bar.showMessage(f"Game exited (code {rc})")
         if not self.isVisible():
@@ -2260,13 +2290,13 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
 
-        # Auto-save settings + music state on exit
         cfg = self.settings_tab._read_ui()
         cfg.update(self.music_player.save_state())
         self.settings_tab.config.update(cfg)
         try:
             CONFIG_FILE.write_text(
-                json.dumps(self.settings_tab.config, indent=2), encoding="utf-8"
+                json.dumps(self.settings_tab.config, indent=2, ensure_ascii=False),
+                encoding="utf-8"
             )
         except Exception as e:
             logger.error(f"Auto-save on exit: {e}")
@@ -2280,6 +2310,13 @@ class MainWindow(QMainWindow):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def main():
+    if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     logger.info(
         f"Python {sys.version}  |  Platform: {platform.system()} {platform.machine()}"
     )
@@ -2288,6 +2325,10 @@ def main():
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(APP_VERSION)
     app.setStyleSheet(DARK_QSS)
+
+    # Load app-level icon so it appears in taskbar too
+    if ICON_FILE.exists():
+        app.setWindowIcon(QIcon(str(ICON_FILE)))
 
     if hasattr(Qt, "HighDpiScaleFactorRoundingPolicy"):
         app.setHighDpiScaleFactorRoundingPolicy(
@@ -2301,5 +2342,6 @@ def main():
     sys.exit(app.exec())
 
 
+# ── PyInstaller guard ─────────────────────────────────────────────────────────
 if __name__ == "__main__":
     main()
