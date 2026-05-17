@@ -8,6 +8,7 @@ import threading
 import subprocess
 import zipfile
 from datetime import datetime
+from loguru import logger
 from pathlib import Path
 from typing import Optional, List, Dict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -101,13 +102,15 @@ for _d in [BASE_DIR, LOG_DIR, INST_DIR]:
 LOG_FILE = LOG_DIR / f"phantomx_{datetime.now():%Y%m%d_%H%M%S}.log"
 
 logger.remove()
-logger.add(
-    sys.stderr, level="DEBUG", colorize=True,
-    format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | {message}"
-)
+if sys.stderr is not None:
+    logger.add(
+        sys.stderr, level="DEBUG", colorize=True,
+        format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | {message}"
+    )
+
 logger.add(
     LOG_FILE, level="DEBUG", rotation="10 MB", retention="14 days",
-    encoding="utf-8",                       
+    encoding="utf-8",
     format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {module}:{line} | {message}"
 )
 
