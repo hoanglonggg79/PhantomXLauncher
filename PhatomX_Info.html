@@ -1,0 +1,1176 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PhantomX Launcher — Minecraft Launcher</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Space+Mono:wght@400;700&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  /* ── Reset & Variables ───────────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg0:      #0d0d1a;
+    --bg1:      #111126;
+    --bg2:      #181830;
+    --bg3:      #1e1e3a;
+    --surface:  #252545;
+    --border:   #2e2e55;
+    --blue:     #89b4fa;
+    --purple:   #cba6f7;
+    --teal:     #89dceb;
+    --green:    #a6e3a1;
+    --red:      #f38ba8;
+    --yellow:   #f9e2af;
+    --text:     #cdd6f4;
+    --muted:    #6c7086;
+    --subtle:   #45475a;
+    --font-display: 'Syne', sans-serif;
+    --font-mono:    'Space Mono', monospace;
+    --font-body:    'Inter', sans-serif;
+  }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg0);
+    color: var(--text);
+    font-family: var(--font-body);
+    font-size: 16px;
+    line-height: 1.7;
+    overflow-x: hidden;
+  }
+
+  /* ── Noise texture overlay ───────────────────────────────────────────── */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* ── Navigation ──────────────────────────────────────────────────────── */
+  nav {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 48px;
+    background: rgba(13,13,26,0.88);
+    backdrop-filter: blur(20px);
+    border-bottom: 1px solid rgba(137,180,250,0.12);
+  }
+
+  .nav-logo {
+    font-family: var(--font-display);
+    font-size: 1.35rem;
+    font-weight: 800;
+    color: var(--blue);
+    text-decoration: none;
+    letter-spacing: -0.02em;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .nav-logo .bolt { color: var(--yellow); }
+
+  .nav-links {
+    display: flex;
+    gap: 32px;
+    list-style: none;
+  }
+  .nav-links a {
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 0.9rem;
+    font-weight: 500;
+    letter-spacing: 0.03em;
+    transition: color 0.2s;
+  }
+  .nav-links a:hover { color: var(--blue); }
+
+  .nav-cta {
+    background: var(--blue);
+    color: #0d0d1a !important;
+    padding: 8px 20px;
+    border-radius: 8px;
+    font-weight: 700;
+    font-family: var(--font-display);
+    transition: background 0.2s, transform 0.2s !important;
+  }
+  .nav-cta:hover {
+    background: var(--teal) !important;
+    transform: translateY(-1px);
+    color: #0d0d1a !important;
+  }
+
+  /* ── Hero ────────────────────────────────────────────────────────────── */
+  .hero {
+    position: relative;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 120px 24px 80px;
+    overflow: hidden;
+  }
+
+  /* Animated aurora background */
+  .hero::after {
+    content: '';
+    position: absolute;
+    width: 900px;
+    height: 900px;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: radial-gradient(
+      ellipse at center,
+      rgba(137,180,250,0.12) 0%,
+      rgba(203,166,247,0.08) 40%,
+      transparent 70%
+    );
+    border-radius: 50%;
+    animation: aurora 8s ease-in-out infinite alternate;
+    pointer-events: none;
+  }
+
+  @keyframes aurora {
+    0%   { transform: translate(-50%,-50%) scale(1) rotate(0deg); opacity: 0.6; }
+    100% { transform: translate(-50%,-50%) scale(1.2) rotate(15deg); opacity: 1; }
+  }
+
+  .hero-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(137,180,250,0.1);
+    border: 1px solid rgba(137,180,250,0.25);
+    color: var(--blue);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    padding: 6px 16px;
+    border-radius: 999px;
+    margin-bottom: 32px;
+    letter-spacing: 0.08em;
+    animation: fade-up 0.8s ease forwards;
+    opacity: 0;
+  }
+  .hero-badge .dot {
+    width: 6px; height: 6px;
+    background: var(--green);
+    border-radius: 50%;
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%       { opacity: 0.4; transform: scale(0.8); }
+  }
+
+  .hero-title {
+    font-family: var(--font-display);
+    font-size: clamp(3rem, 9vw, 7rem);
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -0.04em;
+    color: var(--text);
+    animation: fade-up 0.9s 0.1s ease forwards;
+    opacity: 0;
+  }
+  .hero-title .accent-x { color: var(--blue); }
+  .hero-title .accent-bolt { color: var(--yellow); }
+
+  .hero-sub {
+    margin-top: 20px;
+    font-size: 1.2rem;
+    color: var(--muted);
+    max-width: 560px;
+    line-height: 1.6;
+    animation: fade-up 1s 0.2s ease forwards;
+    opacity: 0;
+  }
+
+  .hero-actions {
+    margin-top: 44px;
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    justify-content: center;
+    animation: fade-up 1.1s 0.3s ease forwards;
+    opacity: 0;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 14px 28px;
+    border-radius: 10px;
+    font-family: var(--font-display);
+    font-size: 0.95rem;
+    font-weight: 700;
+    text-decoration: none;
+    cursor: pointer;
+    transition: all 0.2s;
+    border: none;
+    letter-spacing: 0.01em;
+  }
+  .btn-primary {
+    background: var(--blue);
+    color: #0d0d1a;
+  }
+  .btn-primary:hover {
+    background: var(--teal);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 32px rgba(137,180,250,0.3);
+  }
+  .btn-secondary {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  .btn-secondary:hover {
+    border-color: var(--blue);
+    color: var(--blue);
+    transform: translateY(-2px);
+  }
+
+  .hero-stats {
+    margin-top: 72px;
+    display: flex;
+    gap: 48px;
+    justify-content: center;
+    flex-wrap: wrap;
+    animation: fade-up 1.2s 0.4s ease forwards;
+    opacity: 0;
+  }
+
+  .stat {
+    text-align: center;
+  }
+  .stat-num {
+    font-family: var(--font-display);
+    font-size: 2rem;
+    font-weight: 800;
+    color: var(--blue);
+    line-height: 1;
+  }
+  .stat-label {
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin-top: 4px;
+    letter-spacing: 0.06em;
+  }
+
+  @keyframes fade-up {
+    from { opacity: 0; transform: translateY(24px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ── Section layout ──────────────────────────────────────────────────── */
+  section {
+    position: relative;
+    z-index: 1;
+    padding: 96px 24px;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+
+  .section-label {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    color: var(--purple);
+    margin-bottom: 12px;
+    display: block;
+  }
+
+  .section-title {
+    font-family: var(--font-display);
+    font-size: clamp(1.8rem, 4vw, 3rem);
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    color: var(--text);
+    line-height: 1.1;
+    margin-bottom: 20px;
+  }
+
+  .section-desc {
+    color: var(--muted);
+    font-size: 1.05rem;
+    max-width: 560px;
+    line-height: 1.7;
+  }
+
+  /* ── UI Preview "screenshot" ────────────────────────────────────────── */
+  .ui-preview {
+    margin-top: 72px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 32px 96px rgba(0,0,0,0.6), 0 0 0 1px rgba(137,180,250,0.08);
+    animation: fade-up 1s 0.5s ease forwards;
+    opacity: 0;
+  }
+
+  .ui-titlebar {
+    background: var(--bg1);
+    padding: 10px 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .dot-btn {
+    width: 12px; height: 12px;
+    border-radius: 50%;
+  }
+  .dot-btn.red    { background: #f38ba8; }
+  .dot-btn.yellow { background: #f9e2af; }
+  .dot-btn.green  { background: #a6e3a1; }
+
+  .ui-titlebar-label {
+    flex: 1;
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--muted);
+    letter-spacing: 0.06em;
+  }
+
+  .ui-body {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    min-height: 340px;
+  }
+
+  .ui-sidebar {
+    background: var(--bg1);
+    border-right: 1px solid var(--border);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .ui-nav-item {
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    color: var(--muted);
+    cursor: default;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    transition: background 0.15s;
+  }
+  .ui-nav-item.active {
+    background: var(--surface);
+    color: var(--blue);
+    font-weight: 600;
+  }
+
+  .ui-main {
+    padding: 20px 24px;
+    background: var(--bg2);
+  }
+
+  .ui-toprow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+
+  .ui-title {
+    font-family: var(--font-display);
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--blue);
+  }
+
+  .ui-btn {
+    background: var(--blue);
+    color: #0d0d1a;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    cursor: default;
+    font-family: var(--font-display);
+  }
+  .ui-btn.purple { background: var(--purple); }
+  .ui-btn.green  { background: var(--green); }
+  .ui-btn.red    { background: var(--red); }
+
+  .ui-instance-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .ui-instance-item {
+    background: var(--bg1);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 0.82rem;
+  }
+  .ui-instance-item.selected {
+    border-color: var(--blue);
+    background: rgba(137,180,250,0.07);
+  }
+
+  .inst-icon {
+    font-size: 1.2rem;
+  }
+  .inst-info { flex: 1; }
+  .inst-name { font-weight: 600; color: var(--text); }
+  .inst-ver  { font-size: 0.72rem; color: var(--muted); font-family: var(--font-mono); }
+
+  .inst-badge {
+    font-size: 0.68rem;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(137,180,250,0.15);
+    color: var(--blue);
+    font-family: var(--font-mono);
+  }
+  .inst-badge.fabric  { background: rgba(203,166,247,0.15); color: var(--purple); }
+  .inst-badge.forge   { background: rgba(249,226,175,0.15); color: var(--yellow); }
+
+  .ui-progress-bar {
+    height: 4px;
+    background: var(--surface);
+    border-radius: 2px;
+    margin-top: 12px;
+    overflow: hidden;
+  }
+  .ui-progress-fill {
+    height: 100%;
+    width: 68%;
+    background: linear-gradient(90deg, var(--blue), var(--purple));
+    border-radius: 2px;
+    animation: prog 3s ease-in-out infinite alternate;
+  }
+  @keyframes prog {
+    from { width: 20%; }
+    to   { width: 85%; }
+  }
+
+  /* ── Features grid ───────────────────────────────────────────────────── */
+  .features-header {
+    text-align: center;
+    margin-bottom: 64px;
+  }
+  .features-header .section-desc { margin: 0 auto; }
+
+  .features-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 24px;
+  }
+
+  .feature-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 32px;
+    transition: transform 0.25s, border-color 0.25s, box-shadow 0.25s;
+    position: relative;
+    overflow: hidden;
+  }
+  .feature-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--card-accent, var(--blue)), transparent);
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  .feature-card:hover {
+    transform: translateY(-6px);
+    border-color: var(--card-accent, var(--blue));
+    box-shadow: 0 24px 64px rgba(0,0,0,0.4);
+  }
+  .feature-card:hover::before { opacity: 1; }
+
+  .feature-icon {
+    font-size: 2rem;
+    margin-bottom: 16px;
+    display: block;
+  }
+  .feature-title {
+    font-family: var(--font-display);
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 10px;
+  }
+  .feature-desc {
+    font-size: 0.9rem;
+    color: var(--muted);
+    line-height: 1.65;
+  }
+
+  /* ── Marketplace section ─────────────────────────────────────────────── */
+  .market-split {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 64px;
+    align-items: center;
+  }
+
+  .market-mock {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  }
+
+  .mock-header {
+    background: var(--bg1);
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .mock-search {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 0.78rem;
+    color: var(--muted);
+    font-family: var(--font-body);
+  }
+
+  .mock-mod-list {
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .mock-mod-item {
+    background: var(--bg1);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    transition: border-color 0.2s;
+  }
+  .mock-mod-item:hover {
+    border-color: var(--purple);
+  }
+
+  .mod-thumb {
+    width: 40px; height: 40px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.4rem;
+    flex-shrink: 0;
+  }
+
+  .mod-info { flex: 1; min-width: 0; }
+  .mod-name { font-weight: 600; font-size: 0.85rem; color: var(--text); }
+  .mod-meta { font-size: 0.72rem; color: var(--muted); font-family: var(--font-mono); }
+
+  .mod-dl-btn {
+    background: var(--purple);
+    color: #0d0d1a;
+    border: none;
+    border-radius: 6px;
+    padding: 5px 12px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    cursor: default;
+    align-self: center;
+    flex-shrink: 0;
+    font-family: var(--font-display);
+  }
+
+  /* ── Tech specs ──────────────────────────────────────────────────────── */
+  .specs-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 20px;
+    margin-top: 48px;
+  }
+
+  .spec-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+  }
+
+  .spec-label {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    margin-bottom: 8px;
+    display: block;
+  }
+
+  .spec-value {
+    font-family: var(--font-display);
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: var(--text);
+  }
+
+  .spec-detail {
+    font-size: 0.82rem;
+    color: var(--muted);
+    margin-top: 6px;
+  }
+
+  /* ── Code block ──────────────────────────────────────────────────────── */
+  .code-block {
+    background: var(--bg1);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    margin-top: 48px;
+  }
+
+  .code-header {
+    background: var(--bg0);
+    padding: 12px 20px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .code-title {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--muted);
+    margin-left: 8px;
+  }
+
+  .code-body {
+    padding: 24px;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    line-height: 1.8;
+    overflow-x: auto;
+  }
+
+  .c-comment  { color: var(--muted); }
+  .c-keyword  { color: var(--purple); }
+  .c-string   { color: var(--green); }
+  .c-func     { color: var(--blue); }
+  .c-num      { color: var(--yellow); }
+  .c-var      { color: var(--red); }
+
+  /* ── Credits / maintainer ────────────────────────────────────────────── */
+  .credits {
+    text-align: center;
+    padding: 80px 24px;
+    border-top: 1px solid var(--border);
+  }
+
+  .credits-inner {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .credits-flag {
+    font-size: 2.5rem;
+    animation: wave 2s ease-in-out infinite;
+  }
+  @keyframes wave {
+    0%, 100% { transform: rotate(-5deg); }
+    50%       { transform: rotate(5deg); }
+  }
+
+  .credits-text {
+    font-family: var(--font-display);
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: var(--text);
+  }
+
+  .credits-text .heart {
+    color: var(--red);
+    display: inline-block;
+    animation: heartbeat 1.4s ease-in-out infinite;
+  }
+  @keyframes heartbeat {
+    0%, 100% { transform: scale(1); }
+    14%       { transform: scale(1.3); }
+    28%       { transform: scale(1); }
+    42%       { transform: scale(1.2); }
+    56%       { transform: scale(1); }
+  }
+
+  .credits-sub {
+    font-size: 0.9rem;
+    color: var(--muted);
+  }
+
+  /* ── Footer ──────────────────────────────────────────────────────────── */
+  footer {
+    background: var(--bg1);
+    border-top: 1px solid var(--border);
+    padding: 40px 48px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: gap;
+    gap: 20px;
+    position: relative;
+    z-index: 1;
+  }
+
+  .footer-logo {
+    font-family: var(--font-display);
+    font-size: 1.1rem;
+    font-weight: 800;
+    color: var(--blue);
+  }
+
+  .footer-info {
+    font-size: 0.82rem;
+    color: var(--muted);
+    text-align: center;
+  }
+
+  .footer-ver {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--subtle);
+    text-align: right;
+  }
+
+  /* ── Scroll reveal ───────────────────────────────────────────────────── */
+  .reveal {
+    opacity: 0;
+    transform: translateY(32px);
+    transition: opacity 0.7s ease, transform 0.7s ease;
+  }
+  .reveal.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* ── Divider ─────────────────────────────────────────────────────────── */
+  .divider {
+    width: 100%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--border), transparent);
+    margin: 0 auto;
+  }
+
+  /* ── Responsive ──────────────────────────────────────────────────────── */
+  @media (max-width: 768px) {
+    nav { padding: 12px 20px; }
+    .nav-links { display: none; }
+    .market-split { grid-template-columns: 1fr; }
+    .ui-body { grid-template-columns: 1fr; }
+    .ui-sidebar { display: none; }
+    footer { flex-direction: column; text-align: center; }
+  }
+
+  /* ── Loader pill badges ──────────────────────────────────────────────── */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-family: var(--font-mono);
+    font-weight: 400;
+    border: 1px solid;
+  }
+  .badge-blue   { background: rgba(137,180,250,0.1); color: var(--blue);   border-color: rgba(137,180,250,0.3); }
+  .badge-purple { background: rgba(203,166,247,0.1); color: var(--purple); border-color: rgba(203,166,247,0.3); }
+  .badge-green  { background: rgba(166,227,161,0.1); color: var(--green);  border-color: rgba(166,227,161,0.3); }
+  .badge-yellow { background: rgba(249,226,175,0.1); color: var(--yellow); border-color: rgba(249,226,175,0.3); }
+
+  .badge-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 24px;
+  }
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+  <a href="#" class="nav-logo">
+    <span class="bolt">⚡</span>PhantomX
+  </a>
+  <ul class="nav-links">
+    <li><a href="#features">Features</a></li>
+    <li><a href="#marketplace">Marketplace</a></li>
+    <li><a href="#install">Install</a></li>
+    <li><a href="#credits">Credits</a></li>
+    <li><a href="#install" class="nav-cta">Download</a></li>
+  </ul>
+</nav>
+
+<!-- Hero -->
+<div class="hero">
+  <div class="hero-badge">
+    <span class="dot"></span>
+    VERSION 1.0.1 &nbsp;•&nbsp; STABLE RELEASE
+  </div>
+
+  <h1 class="hero-title">
+    Phantom<span class="accent-x">X</span>
+  </h1>
+
+  <p class="hero-sub">
+    Minecraft Launcher thế hệ mới — nhẹ, nhanh và thân thiện.<br>
+    Quản lý instance, mod, modpack ngay trong một nơi.
+  </p>
+
+  <div class="hero-actions">
+    <a href="#install" class="btn btn-primary">
+      ⬇ Tải về ngay
+    </a>
+    <a href="#features" class="btn btn-secondary">
+      Khám phá tính năng →
+    </a>
+  </div>
+
+  <div class="hero-stats">
+    <div class="stat">
+      <div class="stat-num">3</div>
+      <div class="stat-label">LOADERS HỖ TRỢ</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">∞</div>
+      <div class="stat-label">INSTANCES</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">Modrinth</div>
+      <div class="stat-label">MOD MARKETPLACE</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">0</div>
+      <div class="stat-label">QUẢNG CÁO</div>
+    </div>
+  </div>
+
+  <!-- Fake UI Preview -->
+  <div class="ui-preview">
+    <div class="ui-titlebar">
+      <span class="dot-btn red"></span>
+      <span class="dot-btn yellow"></span>
+      <span class="dot-btn green"></span>
+      <span class="ui-titlebar-label">⚡ PhantomX Launcher  v1.0.1</span>
+    </div>
+    <div class="ui-body">
+      <div class="ui-sidebar">
+        <div class="ui-nav-item active">📦 Instances</div>
+        <div class="ui-nav-item">🧩 Mods</div>
+        <div class="ui-nav-item">🛒 Marketplace</div>
+        <div class="ui-nav-item">📋 Log</div>
+        <div class="ui-nav-item">⚙️ Settings</div>
+      </div>
+      <div class="ui-main">
+        <div class="ui-toprow">
+          <span class="ui-title">Instances</span>
+          <div style="display:flex;gap:8px">
+            <span class="ui-btn green">📥 Install</span>
+            <span class="ui-btn">🎮 Launch</span>
+          </div>
+        </div>
+        <div class="ui-instance-list">
+          <div class="ui-instance-item selected">
+            <span class="inst-icon">🟩</span>
+            <div class="inst-info">
+              <div class="inst-name">Vanilla 1.21.4</div>
+              <div class="inst-ver">minecraft 1.21.4</div>
+            </div>
+            <span class="inst-badge">vanilla</span>
+          </div>
+          <div class="ui-instance-item">
+            <span class="inst-icon">🧵</span>
+            <div class="inst-info">
+              <div class="inst-name">Fabric Modded</div>
+              <div class="inst-ver">minecraft 1.21.1</div>
+            </div>
+            <span class="inst-badge fabric">fabric</span>
+          </div>
+          <div class="ui-instance-item">
+            <span class="inst-icon">⚙️</span>
+            <div class="inst-info">
+              <div class="inst-name">Forge Classic</div>
+              <div class="inst-ver">minecraft 1.20.1</div>
+            </div>
+            <span class="inst-badge forge">forge</span>
+          </div>
+        </div>
+        <div class="ui-progress-bar">
+          <div class="ui-progress-fill"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="divider"></div>
+
+<!-- Features -->
+<section id="features">
+  <div class="features-header reveal">
+    <span class="section-label">// TÍNH NĂNG</span>
+    <h2 class="section-title">Mọi thứ bạn cần<br>trong một launcher</h2>
+    <p class="section-desc">Được xây dựng bằng PyQt6, PhantomX mang lại trải nghiệm launcher hiện đại với hiệu suất native.</p>
+  </div>
+
+  <div class="features-grid">
+    <div class="feature-card reveal" style="--card-accent: var(--blue);">
+      <span class="feature-icon">📦</span>
+      <div class="feature-title">Quản lý Instance</div>
+      <p class="feature-desc">Tạo, xóa, và quản lý nhiều instance Minecraft độc lập. Mỗi instance có thư mục riêng, cài đặt riêng — không bao giờ xung đột.</p>
+    </div>
+
+    <div class="feature-card reveal" style="--card-accent: var(--purple);">
+      <span class="feature-icon">🧩</span>
+      <div class="feature-title">Fabric, Forge & Quilt</div>
+      <p class="feature-desc">Cài đặt tự động các loader phổ biến nhất. Phát hiện thông minh version đã cài, bỏ qua download thừa, tiết kiệm thời gian.</p>
+      <div class="badge-row">
+        <span class="badge badge-purple">fabric</span>
+        <span class="badge badge-yellow">forge</span>
+        <span class="badge badge-green">vanilla</span>
+      </div>
+    </div>
+
+    <div class="feature-card reveal" style="--card-accent: var(--teal);">
+      <span class="feature-icon">🛒</span>
+      <div class="feature-title">Mod Marketplace</div>
+      <p class="feature-desc">Kết nối trực tiếp với Modrinth API — tìm kiếm, xem chi tiết và cài đặt mod ngay trong launcher mà không cần mở trình duyệt.</p>
+    </div>
+
+    <div class="feature-card reveal" style="--card-accent: var(--green);">
+      <span class="feature-icon">⚡</span>
+      <div class="feature-title">Aikars JVM Flags</div>
+      <p class="feature-desc">Được tối ưu sẵn với bộ JVM flags nổi tiếng của Aikar — giảm GC pause, tăng FPS, game mượt mà hơn ngay từ lần đầu chạy.</p>
+    </div>
+
+    <div class="feature-card reveal" style="--card-accent: var(--yellow);">
+      <span class="feature-icon">🎵</span>
+      <div class="feature-title">Theme Music Player</div>
+      <p class="feature-desc">Phát nhạc nền từ <code style="color:var(--blue);font-size:0.85em">./theme/music.mp3</code> tích hợp trong top bar. Điều chỉnh âm lượng, tắt/bật tùy thích — trạng thái được lưu qua các phiên.</p>
+    </div>
+
+    <div class="feature-card reveal" style="--card-accent: var(--red);">
+      <span class="feature-icon">🔒</span>
+      <div class="feature-title">Keyring & Auto-save</div>
+      <p class="feature-desc">Username được lưu an toàn qua hệ thống keyring của OS. Cài đặt tự động lưu khi đóng — không bao giờ mất cấu hình.</p>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- Marketplace deep dive -->
+<section id="marketplace">
+  <div class="market-split">
+    <div class="reveal">
+      <span class="section-label">// MOD MARKETPLACE</span>
+      <h2 class="section-title">Đi chợ mod<br>ngay trong launcher</h2>
+      <p class="section-desc">Kết nối trực tiếp với Modrinth API — một trong những kho mod lớn nhất cộng đồng Minecraft. Tìm kiếm, lọc theo version và loader, xem thông tin, rồi cài đặt chỉ với một click.</p>
+
+      <div class="badge-row" style="margin-top:32px">
+        <span class="badge badge-blue">🔍 Tìm kiếm real-time</span>
+        <span class="badge badge-purple">📋 Chi tiết đầy đủ</span>
+        <span class="badge badge-green">⬇ Cài 1-click</span>
+        <span class="badge badge-yellow">🔢 Lọc version + loader</span>
+      </div>
+    </div>
+
+    <div class="market-mock reveal">
+      <div class="mock-header">
+        <span style="color:var(--purple);font-size:1rem">🛒</span>
+        <span style="font-family:var(--font-display);font-size:0.9rem;font-weight:700;color:var(--text)">Mod Marketplace</span>
+        <span style="flex:1"></span>
+        <span style="font-size:0.7rem;color:var(--muted);font-family:var(--font-mono)">via Modrinth</span>
+      </div>
+      <div style="padding:12px;border-bottom:1px solid var(--border)">
+        <div class="mock-search">🔍  sodium performance…</div>
+      </div>
+      <div class="mock-mod-list">
+        <div class="mock-mod-item">
+          <div class="mod-thumb" style="background:rgba(137,180,250,0.15)">⚡</div>
+          <div class="mod-info">
+            <div class="mod-name">Sodium</div>
+            <div class="mod-meta">by CaffeineMC  •  ⬇ 14.2M  •  fabric</div>
+          </div>
+          <button class="mod-dl-btn">Install</button>
+        </div>
+        <div class="mock-mod-item">
+          <div class="mod-thumb" style="background:rgba(203,166,247,0.15)">🗺️</div>
+          <div class="mod-info">
+            <div class="mod-name">JourneyMap</div>
+            <div class="mod-meta">by techbrew  •  ⬇ 8.5M  •  forge, fabric</div>
+          </div>
+          <button class="mod-dl-btn">Install</button>
+        </div>
+        <div class="mock-mod-item">
+          <div class="mod-thumb" style="background:rgba(166,227,161,0.15)">🌱</div>
+          <div class="mod-info">
+            <div class="mod-name">Create</div>
+            <div class="mod-meta">by simibubi  •  ⬇ 6.1M  •  forge</div>
+          </div>
+          <button class="mod-dl-btn">Install</button>
+        </div>
+        <div class="mock-mod-item">
+          <div class="mod-thumb" style="background:rgba(249,226,175,0.15)">🏰</div>
+          <div class="mod-info">
+            <div class="mod-name">Biomes O' Plenty</div>
+            <div class="mod-meta">by Forstride  •  ⬇ 5.3M  •  forge, fabric</div>
+          </div>
+          <button class="mod-dl-btn">Install</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- Install / Quick start -->
+<section id="install">
+  <div class="reveal" style="text-align:center;margin-bottom:48px">
+    <span class="section-label">// CÀI ĐẶT</span>
+    <h2 class="section-title">Bắt đầu trong 3 bước</h2>
+    <p class="section-desc" style="margin:0 auto">Yêu cầu Python 3.11+, Java 17 hoặc 21.</p>
+  </div>
+
+  <div class="code-block reveal">
+    <div class="code-header">
+      <span class="dot-btn red"></span>
+      <span class="dot-btn yellow"></span>
+      <span class="dot-btn green"></span>
+      <span class="code-title">Cách dùng PhantomX</span>
+    </div>
+    <div class="code-body">
+      <div><span class="c-comment"># 1. Tải về từ Github</span></div>
+      <div><span class="c-func">Tải tại</span> https://github.com/hoanglonggg79/PhantomXLauncher/releases</div>
+      <div style="margin-top:12px"><span class="c-comment"># 2. Giải nén và đọc Thông tin</span></div>
+      <div><span class="c-func">Đọc</span> Thông tin <span class="c-string">File README.TXT và file html có đầy đủ thông tin về Launcher.</span></div>
+      <div style="margin-top:12px"><span class="c-comment"># 3. Mở Launcher</span></div>
+      <div><span class="c-func">Open</span> PhantomXLauncher.exe <span class="c-string"> Thêm phiên bản, mod cần thiết và chơi thôi!</div>
+    </div>
+  </div>
+
+  <div class="specs-grid reveal">
+    <div class="spec-card">
+      <span class="spec-label">PYTHON</span>
+      <div class="spec-value">3.11+</div>
+      <div class="spec-detail">Hoặc cao hơn</div>
+    </div>
+    <div class="spec-card">
+      <span class="spec-label">JAVA</span>
+      <div class="spec-value">17 / 21</div>
+      <div class="spec-detail">JDK khuyên dùng</div>
+    </div>
+    <div class="spec-card">
+      <span class="spec-label">HỆ ĐIỀU HÀNH</span>
+      <div class="spec-value">×3</div>
+      <div class="spec-detail">Windows, macOS, Linux</div>
+    </div>
+    <div class="spec-card">
+      <span class="spec-label">PHIÊN BẢN</span>
+      <div class="spec-value">1.0.1</div>
+      <div class="spec-detail">Stable release</div>
+    </div>
+    <div class="spec-card">
+      <span class="spec-label">GIẤY PHÉP</span>
+      <div class="spec-value">GNU GPL v3</div>
+      <div class="spec-detail">Mã nguồn mở (Kế thừa mạnh mẽ)</div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- Credits -->
+<section id="credits" style="padding:48px 24px 80px">
+  <div class="credits reveal">
+    <div class="credits-inner">
+      <span class="credits-flag">🇻🇳</span>
+      <div class="credits-text">
+        Maintained by HoangLong <span class="heart">❤️</span>
+      </div>
+      <p class="credits-sub">
+        Được xây dựng với tình yêu dành cho cộng đồng Minecraft Việt Nam.
+      </p>
+      <div class="badge-row" style="justify-content:center;margin-top:8px">
+        <span class="badge badge-blue">PyQt6</span>
+        <span class="badge badge-green">minecraft-launcher-lib</span>
+        <span class="badge badge-purple">Modrinth API</span>
+        <span class="badge badge-yellow">loguru</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Footer -->
+<footer>
+  <div class="footer-logo">⚡ PhantomX</div>
+  <div class="footer-info">
+    Maintained by HoangLong ❤️ 🇻🇳 &nbsp;•&nbsp; Open source Minecraft Launcher
+  </div>
+  <div class="footer-ver">
+    <div>v1.0.1</div>
+    <div style="margin-top:2px;font-size:0.68rem">Powered by Modrinth API</div>
+  </div>
+</footer>
+
+<script>
+  // Scroll reveal
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        e.target.classList.add('visible');
+        observer.unobserve(e.target);
+      }
+    });
+  }, { threshold: 0.1, rootMargin: '0px 0px -60px 0px' });
+
+  document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+
+  // Stagger feature cards
+  document.querySelectorAll('.feature-card.reveal').forEach((el, i) => {
+    el.style.transitionDelay = `${i * 0.08}s`;
+  });
+</script>
+</body>
+</html>
