@@ -4,6 +4,9 @@ Modern Minecraft launcher built for speed, simplicity, and modded gameplay.
 
 PhantomX is a lightweight and open-source Minecraft launcher powered by **PyQt6** and **minecraft-launcher-lib**, designed to provide a clean native desktop experience with built-in mod management, multiple isolated instances, and direct integration with the Modrinth ecosystem.
 
+> **This launcher only supports Offline (Cracked) play.**
+> You cannot join major, long-standing, or premium-verified servers. However, LAN play and joining other cracked servers are fully supported.
+
 ---
 
 ## ✨ Features
