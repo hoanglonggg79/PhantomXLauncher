@@ -80,8 +80,6 @@ Secure and convenient account handling.
 
 ## 🖥️ Screenshots
 
-> Add screenshots here later
-
 ![Main UI](./screenshots/main.png)
 ![Marketplace](./screenshots/marketplace.png)
 
