@@ -88,7 +88,7 @@ Secure and convenient account handling.
 
 ## 📋 Requirements
 - Python: 3.11+
-- Java: 17 or 21 
+- Java: 17 or 21 Recommend [Amazon Corretto](https://corretto.aws/downloads/latest/amazon-corretto-21-x64-windows-jdk.msi)
 - OS: Windows, Mac, Linux
 
 ---
