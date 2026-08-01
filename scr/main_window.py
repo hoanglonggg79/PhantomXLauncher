@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
     QLabel, QComboBox, QPushButton, QProgressBar,
     QMessageBox, QInputDialog, QStatusBar, QTabWidget,
 )
-from PyQt6.QtCore import Qt, QTimer, QUrl
+from PyQt6.QtCore import Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QIcon, QDesktopServices
 
 import minecraft_launcher_lib.microsoft_account as msa
@@ -43,6 +43,8 @@ from ui_modpack import ModpackTab
 
 
 class MainWindow(QMainWindow):
+    update_available = pyqtSignal(str)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"PhantomX Launcher  v{APP_VERSION}")
@@ -173,6 +175,7 @@ class MainWindow(QMainWindow):
         self.signals.dl_done.connect(self._on_install_done)
         self.signals.game_exited.connect(self._on_game_exited)
         self.signals.status_msg.connect(self.status_bar.showMessage)
+        self.update_available.connect(self._show_update_dialog)
 
         self.inst_tab.request_install.connect(self._install_instance)
         self.inst_tab.request_launch.connect(self._launch_instance)
@@ -559,29 +562,29 @@ class MainWindow(QMainWindow):
                 remote_cleaned = remote.lower().lstrip("v")
 
                 if _ver_tuple(remote_cleaned) > _ver_tuple(local_version):
-                    def show_update():
-                        reply = QMessageBox.question(
-                            self,
-                            "⭐ Có bản cập nhật",
-                            (
-                                f"Đã có bản cập nhật mới: v{remote}\n"
-                                f"Bạn đang sử dụng phiên bản: v{APP_VERSION}\n\n"
-                                "Mở GitHub releases để tải phiên bản mới nhất?"
-                            ),
-                            QMessageBox.StandardButton.Yes
-                            | QMessageBox.StandardButton.No,
-                        )
-                        if reply == QMessageBox.StandardButton.Yes:
-                            QDesktopServices.openUrl(
-                                QUrl(
-                                    "https://github.com/hoanglonggg79/"
-                                    "PhantomXLauncher/releases/latest"
-                                )
-                            )
-
-                    QTimer.singleShot(0, show_update)
+                    self.update_available.emit(remote)
 
             except Exception as e:
                 logger.debug(f"Update check failed: {e}")
 
         threading.Thread(target=task, daemon=True).start()
+
+    def _show_update_dialog(self, remote: str):
+        reply = QMessageBox.question(
+            self,
+            "⭐ Có bản cập nhật",
+            (
+                f"Đã có bản cập nhật mới: v{remote}\n"
+                f"Bạn đang sử dụng phiên bản: v{APP_VERSION}\n\n"
+                "Mở GitHub releases để tải phiên bản mới nhất?"
+            ),
+            QMessageBox.StandardButton.Yes
+            | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            QDesktopServices.openUrl(
+                QUrl(
+                    "https://github.com/hoanglonggg79/"
+                    "PhantomXLauncher/releases/latest"
+                )
+            )
