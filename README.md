@@ -88,11 +88,11 @@ Benefits:
 ---
 
 ### ☕ Java Runtime Installer
-Download and install Mojang Java runtimes directly from the Settings tab.
+Install official Microsoft OpenJDK runtimes directly from the Settings tab via Windows Winget.
 
-- **Java 8** (legacy), **Java 17** (gamma), **Java 21** (delta)
-- Progress bar and status feedback during download
-- Auto-detects and saves the installed Java path
+- **Java 8**, **Java 17**, and **Java 21** support
+- Fully automated & silent background installation
+- Automatically configures System PATH and Registry to prevent mod loader errors
 
 ---
 
