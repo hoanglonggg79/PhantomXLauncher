@@ -1103,19 +1103,19 @@ class SettingsTab(QWidget):
         btn_row_java = QHBoxLayout()
         self.btn_java8 = QPushButton("☕ Tải Java 8")
         self.btn_java8.clicked.connect(
-            lambda: self._download_java_runtime("java-runtime-legacy")
+            lambda: self._download_java_runtime(8)
         )
         btn_row_java.addWidget(self.btn_java8)
 
         self.btn_java17 = QPushButton("☕ Tải Java 17")
         self.btn_java17.clicked.connect(
-            lambda: self._download_java_runtime("java-runtime-gamma")
+            lambda: self._download_java_runtime(17)
         )
         btn_row_java.addWidget(self.btn_java17)
 
         self.btn_java21 = QPushButton("☕ Tải Java 21")
         self.btn_java21.clicked.connect(
-            lambda: self._download_java_runtime("java-runtime-delta")
+            lambda: self._download_java_runtime(21)
         )
         btn_row_java.addWidget(self.btn_java21)
         java_l.addLayout(btn_row_java)
@@ -1328,7 +1328,7 @@ class SettingsTab(QWidget):
             f"color: {'#a6e3a1' if ok else '#f38ba8'};"
         )
 
-    def _download_java_runtime(self, runtime_name: str):
+    def _download_java_runtime(self, java_version: int):
         if not self.mgr:
             QMessageBox.warning(
                 self, "Error", "MinecraftManager not initialized."
@@ -1337,14 +1337,16 @@ class SettingsTab(QWidget):
 
         self.java_progress.setVisible(True)
         self.java_progress.setValue(0)
-        self.java_status.setText(f"☕ Đang tải {runtime_name}...")
+        self.java_status.setText(
+            f"☕ Đang cài đặt OpenJDK {java_version} qua Winget..."
+        )
         self.java_status.setStyleSheet("color: #cdd6f4;")
 
         self.btn_java8.setEnabled(False)
         self.btn_java17.setEnabled(False)
         self.btn_java21.setEnabled(False)
 
-        self._java_worker = JavaRuntimeWorker(self.mgr, runtime_name)
+        self._java_worker = JavaRuntimeWorker(self.mgr, str(java_version))
         self._java_worker.progress.connect(self._update_java_progress)
         self._java_worker.log.connect(self._update_java_log)
         self._java_worker.done.connect(self._on_java_runtime_done)
@@ -1367,12 +1369,14 @@ class SettingsTab(QWidget):
 
         if java_path:
             self.java_path_edit.setText(java_path)
-            self.java_status.setText("✅ Java đã được cài đặt thành công! Đường dẫn đã được lưu.")
+            self.java_status.setText(
+                "✅ Java đã được cài đặt thành công! Đường dẫn đã được lưu."
+            )
             self.java_status.setStyleSheet("color: #a6e3a1;")
             self.save()
         else:
             self.java_status.setText(
-                "❌ Java download failed. Check the Log tab for details."
+                "❌ Cài đặt Java thất bại — UAC bị hủy hoặc Winget gặp lỗi. Kiểm tra Log tab để biết chi tiết."
             )
             self.java_status.setStyleSheet("color: #f38ba8;")
 

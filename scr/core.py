@@ -66,6 +66,34 @@ except ImportError:
         return os.path.expanduser(f"~/.{a}")
 
 
+# Override subprocess.Popen on Windows so that EVERY child process — including
+# third-party installer scripts from minecraft_launcher_lib (Forge/NeoForge
+# processors), winget, and cleanup tasks — runs without flashing a CMD/PowerShell
+# console window.
+if platform.system() == "Windows":
+    _ORIGINAL_POPEN_INIT = subprocess.Popen.__init__
+
+    def _apply_hidden_subprocess_flags(kwargs: dict) -> dict:
+        kwargs["creationflags"] = kwargs.get("creationflags", 0)
+        kwargs["creationflags"] |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        try:
+            si = kwargs.get("startupinfo")
+            if si is None:
+                si = subprocess.STARTUPINFO()
+                kwargs["startupinfo"] = si
+            si.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 1)
+            si.wShowWindow = 0  # SW_HIDE
+        except Exception:
+            pass
+        return kwargs
+
+    def _hidden_popen_init(self, *args, **kwargs):
+        _apply_hidden_subprocess_flags(kwargs)
+        _ORIGINAL_POPEN_INIT(self, *args, **kwargs)
+
+    subprocess.Popen.__init__ = _hidden_popen_init
+
+
 # ── App constants ──────────────────────────────────────────────────────────────
 APP_NAME    = "PhantomX"
 APP_VERSION = "1.1.0"
@@ -211,7 +239,116 @@ class MinecraftManager:
         return MinecraftManager._session
 
     # ── Java ──────────────────────────────────────────────────────────────────
+    OPENJDK_WINGET_PACKAGES = {
+        8: "Microsoft.OpenJDK.8",
+        17: "Microsoft.OpenJDK.17",
+        21: "Microsoft.OpenJDK.21",
+    }
+
     def find_java(self) -> Optional[str]:
+        candidates = []
+        try:
+            java_infos = mcll.java_utils.find_system_java_versions_information()
+            for info in java_infos:
+                p = info.get("path") if isinstance(info, dict) else getattr(info, "path", None)
+                if p and Path(p).exists():
+                    candidates.append(str(p))
+        except Exception as e:
+            logger.debug(f"mcll java_utils: {e}")
+
+        # JAVA_HOME
+        jh = os.environ.get("JAVA_HOME")
+        if jh:
+            jp = Path(jh) / ("bin/java.exe" if platform.system() == "Windows" else "bin/java")
+            if jp.exists():
+                candidates.append(str(jp))
+
+        # PATH
+        java_exe = "java.exe" if platform.system() == "Windows" else "java"
+        found = shutil.which(java_exe)
+        if found:
+            candidates.append(found)
+
+        # Well-known install locations
+        if platform.system() == "Windows":
+            prog_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+            for base in [prog_files / "Microsoft", prog_files / "Eclipse Adoptium", prog_files / "Java"]:
+                if base.exists():
+                    for jdk_dir in sorted(base.iterdir(), reverse=True):
+                        jp = jdk_dir / "bin" / "java.exe"
+                        if jp.exists():
+                            candidates.append(str(jp))
+            # Registry lookup (HKLM\SOFTWARE\JavaSoft\JDK)
+            try:
+                import winreg
+                for hive in [winreg.HKEY_LOCAL_MACHINE]:
+                    try:
+                        with winreg.OpenKey(hive, r"SOFTWARE\JavaSoft\JDK") as key:
+                            i = 0
+                            while True:
+                                try:
+                                    sub = winreg.EnumKey(key, i)
+                                    i += 1
+                                    try:
+                                        with winreg.OpenKey(key, sub) as subkey:
+                                            home, _ = winreg.QueryValueEx(subkey, "JavaHome")
+                                            jp = Path(home) / "bin" / "java.exe"
+                                            if jp.exists():
+                                                candidates.append(str(jp))
+                                    except OSError:
+                                        pass
+                                except OSError:
+                                    break
+                    except OSError:
+                        pass
+            except Exception as e:
+                logger.debug(f"Registry Java lookup failed: {e}")
+
+        # De-duplicate while preserving order
+        seen = set()
+        unique = []
+        for c in candidates:
+            if c not in seen:
+                seen.add(c)
+                unique.append(c)
+        return unique[0] if unique else None
+
+    def find_java_for_version(self, mc_version: str) -> Optional[str]:
+        """Version-aware Java selection:
+        MC <  1.17  → Java 8
+        MC 1.17–1.20.4 → Java 17
+        MC >= 1.20.5 → Java 21
+        """
+        try:
+            major = int(mc_version.split(".")[1])
+        except Exception:
+            return self.find_java()
+
+        if major < 17:
+            target = 8
+        elif major <= 20:
+            # 1.17–1.20.4 → 17; 1.20.5+ → 21
+            try:
+                minor = int(mc_version.split(".")[2])
+            except Exception:
+                minor = 0
+            if major == 20 and minor >= 5:
+                target = 21
+            else:
+                target = 17
+        else:
+            target = 21
+
+        all_javas = self._scan_all_java_installs()
+        # Prefer exact version match, then fall back to newest
+        for jp in all_javas:
+            if self.java_version(jp) == target:
+                return jp
+        if all_javas:
+            return all_javas[0]
+        return None
+
+    def _scan_all_java_installs(self) -> List[str]:
         candidates = []
         try:
             java_infos = mcll.java_utils.find_system_java_versions_information()
@@ -233,7 +370,48 @@ class MinecraftManager:
         if found:
             candidates.append(found)
 
-        return candidates[0] if candidates else None
+        if platform.system() == "Windows":
+            prog_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+            for base in [prog_files / "Microsoft", prog_files / "Eclipse Adoptium", prog_files / "Java"]:
+                if base.exists():
+                    for jdk_dir in sorted(base.iterdir(), reverse=True):
+                        jp = jdk_dir / "bin" / "java.exe"
+                        if jp.exists():
+                            candidates.append(str(jp))
+            try:
+                import winreg
+                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\JavaSoft\JDK") as key:
+                    i = 0
+                    while True:
+                        try:
+                            sub = winreg.EnumKey(key, i)
+                            i += 1
+                            try:
+                                with winreg.OpenKey(key, sub) as subkey:
+                                    home, _ = winreg.QueryValueEx(subkey, "JavaHome")
+                                    jp = Path(home) / "bin" / "java.exe"
+                                    if jp.exists():
+                                        candidates.append(str(jp))
+                            except OSError:
+                                pass
+                        except OSError:
+                            break
+            except Exception as e:
+                logger.debug(f"Registry Java lookup failed: {e}")
+
+        # Stable sort: newest version first, keep original order for ties
+        def _ver_key(p: str) -> int:
+            v = self.java_version(p)
+            return v if v is not None else -1
+
+        candidates.sort(key=_ver_key, reverse=True)
+        seen = set()
+        unique = []
+        for c in candidates:
+            if c not in seen:
+                seen.add(c)
+                unique.append(c)
+        return unique
 
     def java_version(self, java_path: str) -> Optional[int]:
         try:
@@ -613,7 +791,7 @@ class MinecraftManager:
         uuid: str = "",
         token: str = "",
     ) -> list:
-        java = java_path or self.find_java() or "java"
+        java = java_path or self.find_java_for_version(version_id) or self.find_java() or "java"
 
         jvm_args = [
             f"-Xmx{max_ram}M",
@@ -762,13 +940,133 @@ class MinecraftManager:
             return ""
         return h.hexdigest()
 
-    # ── Java Runtime (Mojang) ─────────────────────────────────────────────────
+    # ── Java Runtime (Winget / Microsoft OpenJDK) ────────────────────────────
     def get_available_java_runtimes(self) -> list:
         try:
             return mcll.runtime.get_available_runtimes()
         except Exception as e:
             logger.error(f"get_available_java_runtimes failed: {e}")
             return []
+
+    def install_openjdk_winget(
+        self,
+        java_version: int,
+        cb_log=None,
+    ) -> Optional[str]:
+        """Install a Microsoft OpenJDK via Winget (silent, elevated).
+
+        Returns the resulting java.exe path on success, or None on failure.
+        """
+        pkg = self.OPENJDK_WINGET_PACKAGES.get(java_version)
+        if not pkg:
+            if cb_log:
+                cb_log(f"❌ Không hỗ trợ cài đặt Java {java_version} qua Winget.")
+            return None
+
+        if platform.system() != "Windows":
+            if cb_log:
+                cb_log("⚠️ Winget chỉ khả dụng trên Windows. Đang thử tải Mojang runtime...")
+            return self.install_java_runtime_mojang(java_version, cb_log=cb_log)
+
+        if cb_log:
+            cb_log(f"☕ Đang cài đặt OpenJDK {java_version} qua Winget ({pkg})…")
+            cb_log("🔐 Cửa sổ UAC có thể xuất hiện — vui lòng chấp nhận để tiếp tục.")
+
+        cmd = (
+            f"winget install {pkg} --silent "
+            f"--accept-package-agreements --accept-source-agreements"
+        )
+
+        try:
+            rc, output = run_powershell_elevated_silent(cmd, cb_log=cb_log)
+        except Exception as e:
+            logger.error(f"install_openjdk_winget elevated powershell failed: {e}")
+            if cb_log:
+                cb_log(f"❌ Lỗi khi chạy Winget: {e}")
+            return None
+
+        if rc != 0:
+            logger.error(f"winget install {pkg} failed with exit code {rc}")
+            if cb_log:
+                cb_log(f"❌ Winget cài đặt thất bại (mã lỗi {rc}).")
+                cb_log(f"   Kiểm tra Log tab để biết chi tiết.")
+            return None
+
+        # Winget installs to C:\Program Files\Microsoft\jdk-<version>.<minor>...
+        best = self._find_openjdk_by_major(java_version)
+        if best:
+            if cb_log:
+                cb_log(f"✅ OpenJDK {java_version} đã được cài đặt thành công: {best}")
+            self._update_java_path_in_config(best)
+            return best
+
+        if cb_log:
+            cb_log("✅ Winget báo thành công nhưng chưa tìm thấy java.exe — thử làm mới PATH…")
+        self._refresh_path_from_registry()
+        best = self._find_openjdk_by_major(java_version)
+        if best:
+            if cb_log:
+                cb_log(f"✅ OpenJDK {java_version} đã được cài đặt thành công: {best}")
+            self._update_java_path_in_config(best)
+            return best
+
+        if cb_log:
+            cb_log("⚠️ Không thể xác định đường dẫn Java mới — vui lòng kiểm tra thủ công.")
+        return None
+
+    def install_java_runtime_mojang(
+        self, java_version: int, cb_log=None, cb_progress=None
+    ) -> Optional[str]:
+        """Fallback: install Mojang runtime (legacy method) when Winget unavailable."""
+        runtime_map = {
+            8: "java-runtime-legacy",
+            17: "java-runtime-gamma",
+            21: "java-runtime-delta",
+        }
+        runtime_name = runtime_map.get(java_version)
+        if not runtime_name:
+            if cb_log:
+                cb_log(f"❌ Không hỗ trợ Java {java_version}.")
+            return None
+
+        if cb_log:
+            cb_log(f"☕ Đang tải môi trường chạy Java (Mojang): {runtime_name}...")
+
+        state = {"current": 0, "max": 0}
+
+        def set_max(m):
+            state["max"] = m
+            if cb_progress:
+                cb_progress(state["current"], m, "Đang tải...")
+
+        def set_progress(c):
+            state["current"] = c
+            if cb_progress:
+                cb_progress(c, state["max"], "Đang tải...")
+
+        def set_status(s):
+            if cb_log:
+                cb_log(f"  {s}")
+
+        try:
+            mcll.runtime.install_jvm_runtime(
+                runtime_name,
+                self.game_dir,
+                callback={
+                    "setStatus": set_status,
+                    "setProgress": set_progress,
+                    "setMax": set_max,
+                },
+            )
+            java_path = self._find_installed_java_path(self.game_dir, runtime_name)
+            if java_path and cb_log:
+                cb_log(f"✅ Cài đặt thành công: {java_path}")
+            return java_path
+        except Exception as e:
+            logger.error(f"install_java_runtime_mojang failed: {e}")
+            if cb_log:
+                cb_log(f"❌ Lỗi khi cài đặt môi trường chạy Java: {e}")
+            return None
 
     def install_java_runtime(
         self,
@@ -777,49 +1075,108 @@ class MinecraftManager:
         cb_log=None,
         cb_progress=None,
     ) -> Optional[str]:
-        try:
-            if not game_dir:
-                game_dir = self.game_dir
+        """Backwards-compatible wrapper.
 
+        Accepts either a Mojang runtime name ('java-runtime-legacy' etc.)
+        or an integer-like Java version. Uses Winget when possible.
+        """
+        # Map legacy Mojang names → Java major version
+        name_to_ver = {
+            "java-runtime-legacy": 8,
+            "java-runtime-gamma": 17,
+            "java-runtime-delta": 21,
+            "java-runtime-alpha": 8,
+            "java-runtime-beta": 16,
+        }
+        java_version = name_to_ver.get(runtime_name)
+        if java_version is None:
+            try:
+                java_version = int(runtime_name)
+            except (TypeError, ValueError):
+                java_version = None
+
+        if java_version is None:
             if cb_log:
-                cb_log(f"☕ Đang tải môi trường chạy Java: {runtime_name}...")
-
-            state = {"current": 0, "max": 0}
-
-            def set_max(m):
-                state["max"] = m
-                if cb_progress:
-                    cb_progress(state["current"], m, "Đang tải...")
-
-            def set_progress(c):
-                state["current"] = c
-                if cb_progress:
-                    cb_progress(c, state["max"], "Đang tải...")
-
-            def set_status(s):
-                if cb_log:
-                    cb_log(f"  {s}")
-
-            mcll.runtime.install_jvm_runtime(
-                runtime_name,
-                game_dir,
-                callback={
-                    "setStatus": set_status,
-                    "setProgress": set_progress,
-                    "setMax": set_max,
-                },
-            )
-
-            java_path = self._find_installed_java_path(game_dir, runtime_name)
-            if java_path and cb_log:
-                cb_log(f"✅ Cài đặt thành công: {java_path}")
-            return java_path
-
-        except Exception as e:
-            logger.error(f"install_java_runtime failed: {e}")
-            if cb_log:
-                cb_log(f"❌ Lỗi khi cài đặt môi trường chạy Java: {e}")
+                cb_log(f"❌ Không xác định được phiên bản Java: {runtime_name}")
             return None
+
+        return self.install_openjdk_winget(java_version, cb_log=cb_log)
+
+    def _find_openjdk_by_major(self, java_version: int) -> Optional[str]:
+        """Search standard install dirs for a jdk-<major>.* java.exe."""
+        target = "java.exe" if platform.system() == "Windows" else "java"
+        prog_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+        search_dirs = []
+        for base in [
+            prog_files / "Microsoft",
+            prog_files / "Eclipse Adoptium",
+            prog_files / "Java",
+            prog_files / "Eclipse Foundation",
+        ]:
+            if base.exists():
+                search_dirs.append(base)
+        for base in search_dirs:
+            for jdk_dir in sorted(base.iterdir(), reverse=True):
+                if jdk_dir.is_dir() and f"jdk-{java_version}" in jdk_dir.name.lower():
+                    jp = jdk_dir / "bin" / target
+                    if jp.exists():
+                        return str(jp)
+        # Fall back to runtime dirs inside game dir
+        runtime_base = Path(self.game_dir) / "runtime"
+        if runtime_base.exists():
+            for p in runtime_base.rglob(target):
+                if p.is_file() and p.parent.name == "bin":
+                    if f"jdk-{java_version}" in str(p).lower() or self.java_version(str(p)) == java_version:
+                        return str(p)
+        return None
+
+    def _refresh_path_from_registry(self):
+        """Re-read JavaSoft registry keys into the current process PATH."""
+        if platform.system() != "Windows":
+            return
+        try:
+            import winreg
+            for hive, flag in [
+                (winreg.HKEY_LOCAL_MACHINE, 0),
+                (winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_32KEY),
+            ]:
+                try:
+                    with winreg.OpenKey(hive, r"SOFTWARE\JavaSoft\JDK", access=winreg.KEY_READ | flag) as key:
+                        i = 0
+                        while True:
+                            try:
+                                sub = winreg.EnumKey(key, i)
+                                i += 1
+                                try:
+                                    with winreg.OpenKey(key, sub) as subkey:
+                                        home, _ = winreg.QueryValueEx(subkey, "JavaHome")
+                                        bin_dir = Path(home) / "bin"
+                                        if bin_dir.exists():
+                                            os.environ["PATH"] = (
+                                                str(bin_dir) + os.pathsep + os.environ.get("PATH", "")
+                                            )
+                                except OSError:
+                                    pass
+                            except OSError:
+                                break
+                except OSError:
+                    pass
+        except Exception as e:
+            logger.debug(f"Registry PATH refresh failed: {e}")
+
+    def _update_java_path_in_config(self, java_path: str):
+        """Persist the selected Java path to config.json."""
+        try:
+            cfg = {}
+            if CONFIG_FILE.exists():
+                cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            cfg["java_path"] = java_path
+            CONFIG_FILE.write_text(
+                json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+            logger.info(f"Java path updated in config: {java_path}")
+        except Exception as e:
+            logger.warning(f"Failed to update java_path in config: {e}")
 
     def _find_installed_java_path(
         self, game_dir: str, runtime_name: str
@@ -970,7 +1327,11 @@ class InstallWorker(QThread):
                 inst.version_id, inst.loader_version, gdir, cb_log=self.log.emit
             )
         elif inst.loader == "forge":
-            jp = self.mgr.find_java() or "java"
+            jp = (
+                self.mgr.find_java_for_version(inst.version_id)
+                or self.mgr.find_java()
+                or "java"
+            )
             ok = self.mgr.install_forge(
                 inst.version_id, inst.loader_version, gdir, jp, cb_log=self.log.emit
             )
@@ -979,7 +1340,11 @@ class InstallWorker(QThread):
                 inst.version_id, inst.loader_version, gdir, cb_log=self.log.emit
             )
         elif inst.loader == "neoforge":
-            jp = self.mgr.find_java() or "java"
+            jp = (
+                self.mgr.find_java_for_version(inst.version_id)
+                or self.mgr.find_java()
+                or "java"
+            )
             ok = self.mgr.install_neoforge(
                 inst.version_id,
                 inst.loader_version,
@@ -1178,11 +1543,33 @@ class JavaRuntimeWorker(QThread):
         self.runtime_name = runtime_name
 
     def run(self):
-        java_path = self.mgr.install_java_runtime(
-            self.runtime_name,
-            cb_log=self.log.emit,
-            cb_progress=lambda c, t, s: self.progress.emit(c, t, s),
-        )
+        java_version = None
+        name_to_ver = {
+            "java-runtime-legacy": 8,
+            "java-runtime-gamma": 17,
+            "java-runtime-delta": 21,
+            "java-runtime-alpha": 8,
+            "java-runtime-beta": 16,
+        }
+        if self.runtime_name in name_to_ver:
+            java_version = name_to_ver[self.runtime_name]
+        else:
+            try:
+                java_version = int(self.runtime_name)
+            except (TypeError, ValueError):
+                java_version = None
+
+        if java_version is not None and java_version in self.mgr.OPENJDK_WINGET_PACKAGES:
+            java_path = self.mgr.install_openjdk_winget(
+                java_version,
+                cb_log=self.log.emit,
+            )
+        else:
+            java_path = self.mgr.install_java_runtime_mojang(
+                java_version or 0,
+                cb_log=self.log.emit,
+                cb_progress=lambda c, t, s: self.progress.emit(c, t, s),
+            )
         self.done.emit(java_path)
 
 
@@ -1252,6 +1639,105 @@ class DiscordPresence:
 # ═══════════════════════════════════════════════════════════════════════════════
 # HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
+
+def run_powershell_elevated_silent(command: str, cb_log=None) -> tuple[int, str]:
+    if platform.system() != "Windows":
+        # Non-Windows fallback: run in shell directly
+        try:
+            r = subprocess.run(
+                ["sh", "-c", command],
+                capture_output=True, text=True, timeout=900,
+            )
+            return r.returncode, (r.stdout or "") + (r.stderr or "")
+        except Exception as e:
+            logger.error(f"run_powershell_elevated_silent non-Windows failed: {e}")
+            return -1, str(e)
+
+    ps_cmd = (
+        f"-NoProfile -NonInteractive -WindowStyle Hidden -Command "
+        f"& {{ $ErrorActionPreference='Stop'; {command} | Out-String | Write-Output; "
+        f"exit $LASTEXITCODE }}"
+    )
+
+    try:
+        # Already elevated?
+        import ctypes
+        if ctypes.windll.shell32.IsUserAnAdmin():
+            if cb_log:
+                cb_log("⚡ Đã có quyền Administrator — Vui lòng chờ cài đặt...")
+            r = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", command],
+                capture_output=True, text=True, timeout=900,
+                encoding="utf-8", errors="replace",
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            out = (r.stdout or "") + "\n" + (r.stderr or "")
+            return r.returncode, out
+
+        if cb_log:
+            cb_log("🔐 Yêu cầu quyền Administrator… (Cửa sổ UAC sẽ xuất hiện) - Vui lòng cho phép UAC và chờ cài đặt")
+
+        class _SHELLEXECUTEINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", ctypes.c_ulong),
+                ("fMask", ctypes.c_ulong),
+                ("hwnd", ctypes.c_void_p),
+                ("lpVerb", ctypes.c_wchar_p),
+                ("lpFile", ctypes.c_wchar_p),
+                ("lpParameters", ctypes.c_wchar_p),
+                ("lpDirectory", ctypes.c_wchar_p),
+                ("nShow", ctypes.c_int),
+                ("hInstApp", ctypes.c_void_p),
+                ("lpIDList", ctypes.c_void_p),
+                ("lpClass", ctypes.c_wchar_p),
+                ("hkeyClass", ctypes.c_void_p),
+                ("dwHotKey", ctypes.c_ulong),
+                ("hIcon", ctypes.c_void_p),
+                ("hProcess", ctypes.c_void_p),
+            ]
+
+        SEE_MASK_NOCLOSEPROCESS = 0x00000040
+        SW_HIDE = 0
+        sei = _SHELLEXECUTEINFO()
+        sei.cbSize = ctypes.sizeof(_SHELLEXECUTEINFO)
+        sei.fMask = SEE_MASK_NOCLOSEPROCESS
+        sei.lpVerb = "runas"
+        sei.lpFile = "powershell.exe"
+        sei.lpParameters = ps_cmd
+        sei.nShow = SW_HIDE
+
+        ok = ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(sei))
+        if not ok:
+            err = ctypes.get_last_error()
+            if err == 1223:  # ERROR_CANCELLED
+                if cb_log:
+                    cb_log("❌ UAC bị hủy — không cài đặt được Java.")
+                return 1223, "UAC cancelled by user"
+            if cb_log:
+                cb_log(f"❌ ShellExecuteExW thất bại (mã {err}).")
+            return err, f"ShellExecuteExW failed with code {err}"
+
+        # Wait for the elevated process to finish
+        hProc = sei.hProcess
+        if hProc:
+            try:
+                ctypes.windll.kernel32.WaitForSingleObject(hProc, 0xFFFFFFFF)
+                exit_code = ctypes.c_ulong(0)
+                ctypes.windll.kernel32.GetExitCodeProcess(hProc, ctypes.byref(exit_code))
+                ctypes.windll.kernel32.CloseHandle(hProc)
+                return int(exit_code.value), ""
+            except Exception as e:
+                logger.warning(f"Failed waiting for elevated process: {e}")
+                return -1, str(e)
+
+        return 0, ""
+
+    except Exception as e:
+        logger.error(f"run_powershell_elevated_silent failed: {e}")
+        if cb_log:
+            cb_log(f"❌ Lỗi khi chạy PowerShell nâng cao: {e}")
+        return -1, str(e)
+
 
 def open_path(path: str):
     try:

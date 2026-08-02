@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QIcon
 
-from core import APP_NAME, APP_VERSION, ICON_FILE
+from core import APP_NAME, APP_VERSION, ICON_FILE, BASE_DIR
 from ui_tabs import DARK_QSS
 from main_window import MainWindow
 
@@ -30,6 +30,9 @@ def main():
     logger.info(
         f"Python {sys.version}  |  Platform: {platform.system()} {platform.machine()}"
     )
+    if platform.system() == "Windows":
+        logger.info("🪟 Hidden subprocess monkeypatch active — all child processes run with no console window.")
+    logger.info(f"Data directory: {BASE_DIR}")
 
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
