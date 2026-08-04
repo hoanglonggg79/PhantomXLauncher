@@ -1,9 +1,3 @@
-"""
-PhantomX Launcher - Modpack Tab
-Ports PhantomXModpackInstaller logic from modpackinstaller.py (no Tkinter).
-Supports CurseForge (.zip) and Modrinth (.mrpack / .zip) formats.
-After installation, the instance is registered in the launcher like any other.
-"""
 
 from __future__ import annotations
 
