@@ -33,7 +33,7 @@ from PyQt6.QtWidgets import (
 
 from core import Instance, MinecraftManager, INST_DIR
 
-_CF_API_KEY = "$2a$10$ikdeyDd1WBkPxFYhOxVAN.ZiJj6dPeAXte47fffCVxI6Ot6S3oEHm"
+_CF_API_KEY = ""
 _MAX_CONCURRENT = 8
 
 
