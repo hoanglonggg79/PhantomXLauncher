@@ -221,7 +221,7 @@ class MinecraftManager:
     MODRINTH_SEARCH = "https://api.modrinth.com/v2/search"
     MODRINTH_VERSION = "https://api.modrinth.com/v2/project/{id}/version"
     CURSEFORGE_SEARCH = "https://api.curseforge.com/v1/mods/search"
-    CURSEFORGE_KEY = "$2a$10$ikdeyDd1WBkPxFYhOxVAN.ZiJj6dPeAXte47fffCVxI6Ot6S3oEHm"
+    CURSEFORGE_KEY = ""
 
     _session: Optional[requests.Session] = None
 
