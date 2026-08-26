@@ -1,8 +1,3 @@
-"""
-PhantomX Launcher - Entry point
-Run: python main.py
-"""
-
 from __future__ import annotations
 
 import sys
@@ -17,7 +12,6 @@ from PyQt6.QtGui import QIcon
 from core import APP_NAME, APP_VERSION, ICON_FILE, BASE_DIR
 from ui_tabs import DARK_QSS
 from main_window import MainWindow
-
 
 def main():
     if sys.stdout and hasattr(sys.stdout, "reconfigure"):
@@ -52,7 +46,6 @@ def main():
 
     logger.info("UI shown — entering event loop")
     sys.exit(app.exec())
-
 
 if __name__ == "__main__":
     if getattr(sys, "frozen", False):

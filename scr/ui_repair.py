@@ -1,9 +1,3 @@
-"""
-PhantomX Launcher - Repair Tab
-Two-phase architecture: Scan → Download Queue → Execute Downloads → Rebuild Natives
-Never modifies user data (mods/, saves/, config/, etc.)
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -37,8 +31,6 @@ from PyQt6.QtGui import QColor
 
 from core import Instance, MinecraftManager, INST_DIR, BASE_DIR
 
-
-# ── Constants ──────────────────────────────────────────────────────────────────
 SAFE_DIRS = frozenset([
     "mods", "config", "saves", "resourcepacks",
     "shaderpacks", "screenshots", "logs",
@@ -48,18 +40,12 @@ MAX_RETRIES = 3
 MOJANG_MANIFEST = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 ASSETS_BASE = "https://resources.download.minecraft.net"
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# REPAIR WORKER
-# ═══════════════════════════════════════════════════════════════════════════════
-
 class RepairWorker(QThread):
-    """Two-phase repair: scan first, download second."""
 
-    progress  = pyqtSignal(int, int, str)   # current, total, status_text
-    log       = pyqtSignal(str)             # log message
-    done      = pyqtSignal(dict)            # summary dict
-    error     = pyqtSignal(str)             # fatal error
+    progress  = pyqtSignal(int, int, str)   
+    log       = pyqtSignal(str)             
+    done      = pyqtSignal(dict)            
+    error     = pyqtSignal(str)             
 
     def __init__(
         self,
@@ -72,7 +58,6 @@ class RepairWorker(QThread):
         self.deep_repair = deep_repair
         self._stop = False
 
-    # ── Main entry ────────────────────────────────────────────────────────────
     def run(self):
         start = time.time()
         summary = {
@@ -86,10 +71,8 @@ class RepairWorker(QThread):
             game_dir = Path(inst.game_dir)
             mc_ver = inst.version_id
 
-            # ── Phase 1: Scan ────────────────────────────────────────────────
-            download_queue: List[Tuple[str, Path, str]] = []  # (url, dest, sha1)
+            download_queue: List[Tuple[str, Path, str]] = []  
 
-            # Step 1: Version files
             self.progress.emit(0, 0, "Đang kiểm tra file phiên bản...")
             self.log.emit(f"🔍 Kiểm tra phiên bản: {mc_ver}")
             jar_items, jar_queue = self._scan_version(game_dir, mc_ver)
@@ -100,7 +83,6 @@ class RepairWorker(QThread):
             if self._stop:
                 return
 
-            # Step 2: Libraries
             self.progress.emit(0, 0, "Đang kiểm tra thư viện...")
             ver_json_path = game_dir / "versions" / mc_ver / f"{mc_ver}.json"
             ver_data = {}
@@ -118,7 +100,6 @@ class RepairWorker(QThread):
             if self._stop:
                 return
 
-            # Step 3: Assets
             self.progress.emit(0, 0, "Đang kiểm tra tài nguyên...")
             asset_items, asset_queue = self._scan_assets(game_dir, ver_data)
             summary["scanned_assets"] = asset_items
@@ -133,7 +114,6 @@ class RepairWorker(QThread):
                 f"📋 Kiểm tra hoàn tất: {total_dl} file cần sửa chữa"
             )
 
-            # ── Phase 2: Download ────────────────────────────────────────────
             if download_queue:
                 self.progress.emit(0, total_dl, f"Đang tải xuống các file bị thiếu (0/{total_dl})...")
                 if AIOHTTP_AVAILABLE:
@@ -144,7 +124,6 @@ class RepairWorker(QThread):
             if self._stop:
                 return
 
-            # Step 5: Rebuild natives
             self.progress.emit(0, 0, "Đang xây dựng lại native libraries...")
             rebuilt = self._rebuild_natives(game_dir, mc_ver, ver_data)
             summary["rebuilt_natives"] = rebuilt
@@ -162,8 +141,6 @@ class RepairWorker(QThread):
     def stop(self):
         self._stop = True
 
-    # ── Phase 1 helpers ───────────────────────────────────────────────────────
-
     def _sha1_file(self, path: Path) -> str:
         h = hashlib.sha1()
         try:
@@ -177,12 +154,11 @@ class RepairWorker(QThread):
     def _scan_version(
         self, game_dir: Path, mc_ver: str
     ) -> Tuple[int, List]:
-        """Check version JSON and client JAR."""
+
         queue = []
         ver_dir = game_dir / "versions" / mc_ver
         ver_dir.mkdir(parents=True, exist_ok=True)
 
-        # Get version info from Mojang manifest
         try:
             import requests
             r = requests.get(MOJANG_MANIFEST, timeout=10)
@@ -196,7 +172,6 @@ class RepairWorker(QThread):
 
         count = 0
 
-        # Check version JSON
         json_path = ver_dir / f"{mc_ver}.json"
         if not json_path.exists() and ver_info:
             self.log.emit(f"⚠️  Thiếu: {mc_ver}.json → hàng đợi tải xuống")
@@ -205,7 +180,6 @@ class RepairWorker(QThread):
         else:
             count += 1
 
-        # Check client JAR
         jar_path = ver_dir / f"{mc_ver}.jar"
         count += 1
         if ver_info and json_path.exists():
@@ -236,7 +210,7 @@ class RepairWorker(QThread):
     def _scan_libraries(
         self, game_dir: Path, ver_data: dict
     ) -> Tuple[int, List]:
-        """Verify all libraries from version JSON."""
+
         queue = []
         libs = ver_data.get("libraries", [])
         lib_dir = game_dir / "libraries"
@@ -257,7 +231,6 @@ class RepairWorker(QThread):
         count = len(lib_paths)
         self.log.emit(f"  Đang kiểm tra {count} thư viện...")
 
-        # Use thread pool for SHA-1 verification
         needs_dl = []
         with ThreadPoolExecutor(max_workers=8) as ex:
             futures = {
@@ -286,7 +259,7 @@ class RepairWorker(QThread):
     def _scan_assets(
         self, game_dir: Path, ver_data: dict
     ) -> Tuple[int, List]:
-        """Verify asset files."""
+
         queue = []
         asset_index_info = ver_data.get("assetIndex", {})
         index_id = asset_index_info.get("id", "")
@@ -300,7 +273,6 @@ class RepairWorker(QThread):
         index_path = assets_dir / "indexes" / f"{index_id}.json"
         index_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Download asset index if missing
         if not index_path.exists() and index_url:
             try:
                 import requests
@@ -346,8 +318,6 @@ class RepairWorker(QThread):
         self.log.emit(f"  Tài nguyên: {len(needs_dl)} cần sửa chữa trong số {count}")
         return count, queue
 
-    # ── Phase 2: Download ──────────────────────────────────────────────────────
-
     async def _download_all(self, queue: List[Tuple[str, Path, str]], total: int):
         done_count = [0]
         sem = asyncio.Semaphore(MAX_CONCURRENT_DL)
@@ -381,7 +351,7 @@ class RepairWorker(QThread):
             await asyncio.gather(*tasks)
 
     def _download_all_sync(self, queue: List[Tuple[str, Path, str]], total: int):
-        """Fallback synchronous download (no aiohttp)."""
+
         import requests
         for i, (url, dest, sha1) in enumerate(queue):
             for attempt in range(MAX_RETRIES):
@@ -395,8 +365,6 @@ class RepairWorker(QThread):
                     if attempt == MAX_RETRIES - 1:
                         self.log.emit(f"  ❌ Thất bại: {dest.name} — {e}")
             self.progress.emit(i + 1, total, f"Đang tải xuống các tệp bị thiếu ({i+1}/{total})...")
-
-    # ── Phase 2: Rebuild natives ──────────────────────────────────────────────
 
     def _rebuild_natives(self, game_dir: Path, mc_ver: str, ver_data: dict) -> bool:
         natives_dir = game_dir / "versions" / mc_ver / "natives"
@@ -458,13 +426,8 @@ class RepairWorker(QThread):
                 allowed = (action == "allow")
         return allowed
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# REPAIR TAB
-# ═══════════════════════════════════════════════════════════════════════════════
-
 class RepairTab(QWidget):
-    # Forward repair log messages to main window’s Log tab
+    
     repair_log = pyqtSignal(str)
 
     def __init__(self, inst_tab, parent=None):
@@ -476,7 +439,6 @@ class RepairTab(QWidget):
     def _build_ui(self):
         layout = QVBoxLayout(self)
 
-        # Header
         h = QHBoxLayout()
         lbl = QLabel("🔧 Sửa Chữa Instance")
         lbl.setObjectName("header")
@@ -484,7 +446,6 @@ class RepairTab(QWidget):
         h.addStretch()
         layout.addLayout(h)
 
-        # Instance selector
         sel_grp = QGroupBox("Chọn Instance để sửa chữa")
         sel_l = QHBoxLayout(sel_grp)
         sel_l.addWidget(QLabel("Instance:"))
@@ -494,7 +455,6 @@ class RepairTab(QWidget):
         sel_l.addStretch()
         layout.addWidget(sel_grp)
 
-        # Options
         opt_grp = QGroupBox("Phương thức sửa chữa")
         opt_l = QVBoxLayout(opt_grp)
         self.deep_cb = QCheckBox(
@@ -502,17 +462,16 @@ class RepairTab(QWidget):
         )
         opt_l.addWidget(self.deep_cb)
         note = QLabel("Sửa chữa nhanh (mặc định): chỉ kiểm tra sự tồn tại của các tệp tài nguyên.")
-        note.setStyleSheet("color: #a6adc8; font-size: 11px;")
+        note.setStyleSheet("color: 
         opt_l.addWidget(note)
 
         warn = QLabel(
             "⚠️  Việc sửa chữa không chỉnh sửa: mods/ · saves/ · config/ · resourcepacks/ · shaderpacks/"
         )
-        warn.setStyleSheet("color: #f9e2af; font-size: 11px;")
+        warn.setStyleSheet("color: 
         opt_l.addWidget(warn)
         layout.addWidget(opt_grp)
 
-        # Action buttons
         btn_row = QHBoxLayout()
         self.start_btn = QPushButton("🔧 Bắt đầu sửa chữa")
         self.start_btn.setObjectName("success")
@@ -527,7 +486,6 @@ class RepairTab(QWidget):
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
-        # Progress
         self.status_lbl = QLabel("")
         self.status_lbl.setObjectName("subtitle")
         layout.addWidget(self.status_lbl)
@@ -536,7 +494,6 @@ class RepairTab(QWidget):
         self.prog_bar.setVisible(False)
         layout.addWidget(self.prog_bar)
 
-        # Log output
         log_grp = QGroupBox("Repair Log")
         log_l = QVBoxLayout(log_grp)
         self.log_text = QTextEdit()
@@ -558,8 +515,8 @@ class RepairTab(QWidget):
         ts = datetime.now().strftime("%H:%M:%S")
         safe = msg.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         self.log_text.append(
-            f'<span style="color:#6c7086">[{ts}]</span> '
-            f'<span style="color:#cdd6f4">{safe}</span>'
+            f'<span style="color:
+            f'<span style="color:
         )
         self.log_text.ensureCursorVisible()
 
@@ -580,13 +537,13 @@ class RepairTab(QWidget):
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.prog_bar.setVisible(True)
-        self.prog_bar.setRange(0, 0)  # indeterminate
+        self.prog_bar.setRange(0, 0)  
         self.status_lbl.setText("Đang khởi tạo...")
 
         self._worker = RepairWorker(inst, deep_repair=self.deep_cb.isChecked())
         self._worker.progress.connect(self._on_progress)
         self._worker.log.connect(self._append_log)
-        self._worker.log.connect(self.repair_log)   # forward to main Log tab
+        self._worker.log.connect(self.repair_log)   
         self._worker.done.connect(self._on_done)
         self._worker.error.connect(self._on_error)
         self._worker.start()
@@ -606,7 +563,7 @@ class RepairTab(QWidget):
                 self.prog_bar.setVisible(False)
                 self.status_lbl.setText("")
         else:
-            self.prog_bar.setRange(0, 0)  # indeterminate
+            self.prog_bar.setRange(0, 0)  
 
     def _on_done(self, summary: dict):
         self._reset_ui()

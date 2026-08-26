@@ -1,8 +1,3 @@
-"""
-PhantomX Launcher - Core module
-Contains: constants, data models, MinecraftManager, workers, Discord RPC
-"""
-
 from __future__ import annotations
 
 import os
@@ -24,7 +19,6 @@ from urllib.parse import urlparse, parse_qs
 
 from loguru import logger
 
-# ── Third-party ────────────────────────────────────────────────────────────────
 try:
     from PyQt6.QtCore import QThread, pyqtSignal, QObject, QUrl
     from PyQt6.QtGui import QDesktopServices
@@ -65,11 +59,6 @@ except ImportError:
     def user_data_dir(a, b):
         return os.path.expanduser(f"~/.{a}")
 
-
-# Override subprocess.Popen on Windows so that EVERY child process — including
-# third-party installer scripts from minecraft_launcher_lib (Forge/NeoForge
-# processors), winget, and cleanup tasks — runs without flashing a CMD/PowerShell
-# console window.
 if platform.system() == "Windows":
     _ORIGINAL_POPEN_INIT = subprocess.Popen.__init__
 
@@ -82,7 +71,7 @@ if platform.system() == "Windows":
                 si = subprocess.STARTUPINFO()
                 kwargs["startupinfo"] = si
             si.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 1)
-            si.wShowWindow = 0  # SW_HIDE
+            si.wShowWindow = 0  
         except Exception:
             pass
         return kwargs
@@ -93,10 +82,8 @@ if platform.system() == "Windows":
 
     subprocess.Popen.__init__ = _hidden_popen_init
 
-
-# ── App constants ──────────────────────────────────────────────────────────────
 APP_NAME    = "PhantomX"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 APP_AUTHOR  = "PhantomXTeam"
 KEYRING_SVC = "PhantomXLauncher"
 WATERMARK   = "Phát triển bởi HoangLong ❤️ 🇻🇳"
@@ -132,11 +119,6 @@ logger.add(
     format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {module}:{line} | {message}"
 )
 logger.info(f"PhantomX {APP_VERSION} starting — log: {LOG_FILE}")
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# DATA MODELS
-# ═══════════════════════════════════════════════════════════════════════════════
 
 class Instance:
     def __init__(
@@ -194,11 +176,6 @@ class Instance:
             logger.error(f"Failed to load instance {path}: {e}")
             return None
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# SIGNALS
-# ═══════════════════════════════════════════════════════════════════════════════
-
 class Signals(QObject):
     log = pyqtSignal(str, str)
     progress = pyqtSignal(int, int, str)
@@ -207,11 +184,6 @@ class Signals(QObject):
     dl_done = pyqtSignal(bool, str)
     game_exited = pyqtSignal(int)
     status_msg = pyqtSignal(str)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# CORE MANAGER
-# ═══════════════════════════════════════════════════════════════════════════════
 
 class MinecraftManager:
     FABRIC_META = "https://meta.fabricmc.net/v2/versions/loader/{mc_version}"
@@ -238,7 +210,6 @@ class MinecraftManager:
             MinecraftManager._session = s
         return MinecraftManager._session
 
-    # ── Java ──────────────────────────────────────────────────────────────────
     OPENJDK_WINGET_PACKAGES = {
         8: "Microsoft.OpenJDK.8",
         17: "Microsoft.OpenJDK.17",
@@ -256,20 +227,17 @@ class MinecraftManager:
         except Exception as e:
             logger.debug(f"mcll java_utils: {e}")
 
-        # JAVA_HOME
         jh = os.environ.get("JAVA_HOME")
         if jh:
             jp = Path(jh) / ("bin/java.exe" if platform.system() == "Windows" else "bin/java")
             if jp.exists():
                 candidates.append(str(jp))
 
-        # PATH
         java_exe = "java.exe" if platform.system() == "Windows" else "java"
         found = shutil.which(java_exe)
         if found:
             candidates.append(found)
 
-        # Well-known install locations
         if platform.system() == "Windows":
             prog_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
             for base in [prog_files / "Microsoft", prog_files / "Eclipse Adoptium", prog_files / "Java"]:
@@ -278,7 +246,7 @@ class MinecraftManager:
                         jp = jdk_dir / "bin" / "java.exe"
                         if jp.exists():
                             candidates.append(str(jp))
-            # Registry lookup (HKLM\SOFTWARE\JavaSoft\JDK)
+            
             try:
                 import winreg
                 for hive in [winreg.HKEY_LOCAL_MACHINE]:
@@ -304,7 +272,6 @@ class MinecraftManager:
             except Exception as e:
                 logger.debug(f"Registry Java lookup failed: {e}")
 
-        # De-duplicate while preserving order
         seen = set()
         unique = []
         for c in candidates:
@@ -314,11 +281,7 @@ class MinecraftManager:
         return unique[0] if unique else None
 
     def find_java_for_version(self, mc_version: str) -> Optional[str]:
-        """Version-aware Java selection:
-        MC <  1.17  → Java 8
-        MC 1.17–1.20.4 → Java 17
-        MC >= 1.20.5 → Java 21
-        """
+
         try:
             major = int(mc_version.split(".")[1])
         except Exception:
@@ -327,7 +290,7 @@ class MinecraftManager:
         if major < 17:
             target = 8
         elif major <= 20:
-            # 1.17–1.20.4 → 17; 1.20.5+ → 21
+            
             try:
                 minor = int(mc_version.split(".")[2])
             except Exception:
@@ -340,7 +303,7 @@ class MinecraftManager:
             target = 21
 
         all_javas = self._scan_all_java_installs()
-        # Prefer exact version match, then fall back to newest
+        
         for jp in all_javas:
             if self.java_version(jp) == target:
                 return jp
@@ -399,7 +362,6 @@ class MinecraftManager:
             except Exception as e:
                 logger.debug(f"Registry Java lookup failed: {e}")
 
-        # Stable sort: newest version first, keep original order for ties
         def _ver_key(p: str) -> int:
             v = self.java_version(p)
             return v if v is not None else -1
@@ -459,7 +421,6 @@ class MinecraftManager:
             return False, f"⚠️  Có Java nhưng phiên bản không thể xác định được ({jp})"
         return True, f"✅ Java {v} — {jp}"
 
-    # ── Version list ──────────────────────────────────────────────────────────
     def get_versions(self, include_snapshots: bool = False) -> list:
         try:
             all_v = mcll.utils.get_version_list()
@@ -471,7 +432,6 @@ class MinecraftManager:
             logger.error(f"get_versions failed: {e}")
             return []
 
-    # ── Installation checks ───────────────────────────────────────────────────
     def is_version_installed(self, version_id: str, game_dir: str) -> bool:
         ver_dir = Path(game_dir) / "versions" / version_id
         jar = ver_dir / f"{version_id}.jar"
@@ -492,7 +452,6 @@ class MinecraftManager:
                 return True
         return False
 
-    # ── Install / download ────────────────────────────────────────────────────
     def install_vanilla(
         self, version_id: str, game_dir: str, cb_progress=None, cb_log=None
     ) -> bool:
@@ -586,12 +545,12 @@ class MinecraftManager:
             if cb_log:
                 cb_log(f"⚙️  Đang cài Forge {forge_version} cho phiên bản {mc_version}…")
             version_str = f"{mc_version}-{forge_version}" if forge_version else mc_version
-            # Run Forge installer via Java CLI to avoid PermissionError in Program Files
+            
             mcll.forge.install_forge_version(version_str, game_dir, java=java_path)
             logger.info(f"Forge đã được cài đặt: {version_str}")
             return True
         except PermissionError as pe:
-            # Retry once after a short delay (antivirus file lock)
+            
             logger.warning(f"install_forge PermissionError (retrying): {pe}")
             if cb_log:
                 cb_log(f"⚠️  Lỗi quyền — đang thử lại trong 2 giây…")
@@ -642,7 +601,7 @@ class MinecraftManager:
             if cb_log:
                 cb_log(f"🪡 Đang cài đặt Quilt {loader_version or 'latest'} cho phiên bản {mc_version}…")
             lv = loader_version.strip() or None
-            # Try direct quilt module first (newer mcll), fall back to mod_loader API
+            
             try:
                 mcll.quilt.install_quilt(mc_version, game_dir, loader_version=lv)
             except AttributeError:
@@ -670,7 +629,7 @@ class MinecraftManager:
                 cb_log(f"⚙️  Đang cài đặt NeoForge {neoforge_version} cho phiên bản {mc_version}…")
             lv = neoforge_version.strip() or None
             full_neoforge = f"{mc_version}-{lv}" if lv else mc_version
-            # Try direct neoforge module first, fall back to mod_loader API
+            
             try:
                 mcll.neoforge.install_neoforge_version(
                     full_neoforge, game_dir, java=java_path or None
@@ -702,7 +661,6 @@ class MinecraftManager:
                 cb_log(f"❌ NeoForge lỗi: {e}")
             return False
 
-    # ── Mod Marketplace: Modrinth ─────────────────────────────────────────────
     def search_modrinth(
         self, query: str, mc_version: str = "", loader: str = "", limit: int = 20
     ) -> List[Dict]:
@@ -779,7 +737,6 @@ class MinecraftManager:
                 cb_log(f"❌ Lỗi tải xuống: {e}")
             return False
 
-    # ── Build launch command ──────────────────────────────────────────────────
     def build_command(
         self,
         version_id: str,
@@ -846,7 +803,6 @@ class MinecraftManager:
         logger.debug(f"Launch command built ({len(cmd)} args), java={java}")
         return cmd
 
-    # ── Pre-launch optimisation ─────────────────────────────────────────────
     def pre_launch_cleanup(self, game_dir: str, cb_log=None):
         removed = 0
         base = Path(game_dir)
@@ -874,7 +830,6 @@ class MinecraftManager:
             cb_log(f"🧹 Pre-launch cleanup: removed {removed} temp file(s)")
         logger.info(f"Pre-launch cleanup done ({removed} files) in {game_dir}")
 
-    # ── Mod management helpers ────────────────────────────────────────────────
     def scan_mods(self, mods_dir: Path) -> List[Dict]:
         mods = []
         if not mods_dir.exists():
@@ -930,7 +885,7 @@ class MinecraftManager:
 
     @staticmethod
     def _sha1_full(path: Path) -> str:
-        """Return full 40-char SHA-1 hex digest."""
+
         h = hashlib.sha1()
         try:
             with open(path, "rb") as f:
@@ -940,7 +895,6 @@ class MinecraftManager:
             return ""
         return h.hexdigest()
 
-    # ── Java Runtime (Winget / Microsoft OpenJDK) ────────────────────────────
     def get_available_java_runtimes(self) -> list:
         try:
             return mcll.runtime.get_available_runtimes()
@@ -953,10 +907,7 @@ class MinecraftManager:
         java_version: int,
         cb_log=None,
     ) -> Optional[str]:
-        """Install a Microsoft OpenJDK via Winget (silent, elevated).
 
-        Returns the resulting java.exe path on success, or None on failure.
-        """
         pkg = self.OPENJDK_WINGET_PACKAGES.get(java_version)
         if not pkg:
             if cb_log:
@@ -992,7 +943,6 @@ class MinecraftManager:
                 cb_log(f"   Kiểm tra Log tab để biết chi tiết.")
             return None
 
-        # Winget installs to C:\Program Files\Microsoft\jdk-<version>.<minor>...
         best = self._find_openjdk_by_major(java_version)
         if best:
             if cb_log:
@@ -1017,7 +967,7 @@ class MinecraftManager:
     def install_java_runtime_mojang(
         self, java_version: int, cb_log=None, cb_progress=None
     ) -> Optional[str]:
-        """Fallback: install Mojang runtime (legacy method) when Winget unavailable."""
+
         runtime_map = {
             8: "java-runtime-legacy",
             17: "java-runtime-gamma",
@@ -1075,12 +1025,7 @@ class MinecraftManager:
         cb_log=None,
         cb_progress=None,
     ) -> Optional[str]:
-        """Backwards-compatible wrapper.
 
-        Accepts either a Mojang runtime name ('java-runtime-legacy' etc.)
-        or an integer-like Java version. Uses Winget when possible.
-        """
-        # Map legacy Mojang names → Java major version
         name_to_ver = {
             "java-runtime-legacy": 8,
             "java-runtime-gamma": 17,
@@ -1103,7 +1048,7 @@ class MinecraftManager:
         return self.install_openjdk_winget(java_version, cb_log=cb_log)
 
     def _find_openjdk_by_major(self, java_version: int) -> Optional[str]:
-        """Search standard install dirs for a jdk-<major>.* java.exe."""
+
         target = "java.exe" if platform.system() == "Windows" else "java"
         prog_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
         search_dirs = []
@@ -1121,7 +1066,7 @@ class MinecraftManager:
                     jp = jdk_dir / "bin" / target
                     if jp.exists():
                         return str(jp)
-        # Fall back to runtime dirs inside game dir
+        
         runtime_base = Path(self.game_dir) / "runtime"
         if runtime_base.exists():
             for p in runtime_base.rglob(target):
@@ -1131,7 +1076,7 @@ class MinecraftManager:
         return None
 
     def _refresh_path_from_registry(self):
-        """Re-read JavaSoft registry keys into the current process PATH."""
+
         if platform.system() != "Windows":
             return
         try:
@@ -1165,7 +1110,7 @@ class MinecraftManager:
             logger.debug(f"Registry PATH refresh failed: {e}")
 
     def _update_java_path_in_config(self, java_path: str):
-        """Persist the selected Java path to config.json."""
+
         try:
             cfg = {}
             if CONFIG_FILE.exists():
@@ -1190,11 +1135,6 @@ class MinecraftManager:
                 return str(p)
         return None
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# WORKER THREADS
-# ═══════════════════════════════════════════════════════════════════════════════
-
 class MicrosoftAuthWorker(QThread):
     login_finished = pyqtSignal(dict)
     login_failed = pyqtSignal(str)
@@ -1210,12 +1150,11 @@ class MicrosoftAuthWorker(QThread):
         redirect_url = f"http://localhost:{self.port}"
         try:
             login_data = msa.get_secure_login_data(self.client_id, redirect_url)
-            
-            # Nếu login_data trả về Tuple 2 hoặc 3 phần tử:
+
             if isinstance(login_data, tuple):
                 login_url, code_verifier = login_data[0], login_data[1]
             else:
-                # Dành cho trường hợp dùng bản cũ trả về dict
+                
                 login_url = login_data["url"]
                 code_verifier = login_data["code_verifier"]
 
@@ -1253,14 +1192,8 @@ class MicrosoftAuthWorker(QThread):
                     self.send_response(200)
                     self.send_header("Content-Type", "text/html; charset=utf-8")
                     self.end_headers()
-                    html = """
-                    <html>
-                    <body style="font-family: Arial, sans-serif; text-align: center; margin-top: 50px;">
-                        <h1 style="color: #2e7d32;">Đăng nhập thành công!</h1>
-                        <p>Bạn có thể đóng tab này và quay lại <b>PhantomX Launcher</b> để chơi game.</p>
-                    </body>
-                    </html>
-                    """
+                    html = 
+
                     self.wfile.write(html.encode("utf-8"))
                     QThread.currentThread().msleep(100)
                     if worker_self.httpd:
@@ -1290,7 +1223,6 @@ class MicrosoftAuthWorker(QThread):
         finally:
             if self.httpd:
                 self.httpd.server_close()
-
 
 class InstallWorker(QThread):
     done = pyqtSignal(bool, str)
@@ -1352,7 +1284,6 @@ class InstallWorker(QThread):
                 java_path=jp,
                 cb_log=self.log.emit,
             )
-        # loader == "vanilla" → ok already True
 
         if ok:
             inst.save()
@@ -1360,7 +1291,6 @@ class InstallWorker(QThread):
             self.done.emit(True, inst.name)
         else:
             self.done.emit(False, inst.name)
-
 
 class LaunchWorker(QThread):
     done = pyqtSignal(int)
@@ -1479,7 +1409,6 @@ class LaunchWorker(QThread):
                 proc.kill()
                 logger.warning("Tiến trình trò chơi đã bị buộc dừng (SIGKILL)")
 
-
 class ModSearchWorker(QThread):
     results_ready = pyqtSignal(list)
     error = pyqtSignal(str)
@@ -1506,7 +1435,6 @@ class ModSearchWorker(QThread):
         except Exception as e:
             self.error.emit(str(e))
 
-
 class ModDownloadWorker(QThread):
     done = pyqtSignal(bool, str)
     log = pyqtSignal(str)
@@ -1530,7 +1458,6 @@ class ModDownloadWorker(QThread):
             cb_log=self.log.emit,
         )
         self.done.emit(ok, self.filename)
-
 
 class JavaRuntimeWorker(QThread):
     progress = pyqtSignal(int, int, str)
@@ -1571,11 +1498,6 @@ class JavaRuntimeWorker(QThread):
                 cb_progress=lambda c, t, s: self.progress.emit(c, t, s),
             )
         self.done.emit(java_path)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# DISCORD RICH PRESENCE
-# ═══════════════════════════════════════════════════════════════════════════════
 
 class DiscordPresence:
     def __init__(self, client_id: str = "1526783238406672475"):
@@ -1635,14 +1557,9 @@ class DiscordPresence:
             self.client = None
             self._running = False
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# HELPERS
-# ═══════════════════════════════════════════════════════════════════════════════
-
 def run_powershell_elevated_silent(command: str, cb_log=None) -> tuple[int, str]:
     if platform.system() != "Windows":
-        # Non-Windows fallback: run in shell directly
+        
         try:
             r = subprocess.run(
                 ["sh", "-c", command],
@@ -1660,7 +1577,7 @@ def run_powershell_elevated_silent(command: str, cb_log=None) -> tuple[int, str]
     )
 
     try:
-        # Already elevated?
+        
         import ctypes
         if ctypes.windll.shell32.IsUserAnAdmin():
             if cb_log:
@@ -1709,7 +1626,7 @@ def run_powershell_elevated_silent(command: str, cb_log=None) -> tuple[int, str]
         ok = ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(sei))
         if not ok:
             err = ctypes.get_last_error()
-            if err == 1223:  # ERROR_CANCELLED
+            if err == 1223:  
                 if cb_log:
                     cb_log("❌ UAC bị hủy — không cài đặt được Java.")
                 return 1223, "UAC cancelled by user"
@@ -1717,7 +1634,6 @@ def run_powershell_elevated_silent(command: str, cb_log=None) -> tuple[int, str]
                 cb_log(f"❌ ShellExecuteExW thất bại (mã {err}).")
             return err, f"ShellExecuteExW failed with code {err}"
 
-        # Wait for the elevated process to finish
         hProc = sei.hProcess
         if hProc:
             try:
@@ -1738,7 +1654,6 @@ def run_powershell_elevated_silent(command: str, cb_log=None) -> tuple[int, str]
             cb_log(f"❌ Lỗi khi chạy PowerShell nâng cao: {e}")
         return -1, str(e)
 
-
 def open_path(path: str):
     try:
         if platform.system() == "Windows":
@@ -1749,7 +1664,6 @@ def open_path(path: str):
             subprocess.Popen(["xdg-open", path])
     except Exception as e:
         logger.error(f"open_path({path}): {e}")
-
 
 def _safe_remove(path: Path, retries: int = 3, delay: float = 1.5):
     for attempt in range(retries):
@@ -1763,9 +1677,8 @@ def _safe_remove(path: Path, retries: int = 3, delay: float = 1.5):
             else:
                 raise
 
-
 def _safe_rmtree(path: Path, retries: int = 3, delay: float = 1.5):
-    """Remove a directory tree with retries on PermissionError."""
+
     for attempt in range(retries):
         try:
             if path.exists():
@@ -1777,9 +1690,8 @@ def _safe_rmtree(path: Path, retries: int = 3, delay: float = 1.5):
             else:
                 raise
 
-
 def _safe_move(src: Path, dst: Path, retries: int = 3, delay: float = 1.5):
-    """Move a file/dir with retries on PermissionError."""
+
     for attempt in range(retries):
         try:
             shutil.move(str(src), str(dst))

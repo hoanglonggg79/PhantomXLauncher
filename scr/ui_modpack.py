@@ -1,10 +1,10 @@
-
 from __future__ import annotations
 
 import asyncio
 import json
-import os
+import re
 import shutil
+import uuid
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -18,7 +18,7 @@ try:
 except ImportError:
     AIOHTTP_AVAILABLE = False
 
-from PyQt6.QtCore import QThread, pyqtSignal, Qt
+from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QProgressBar, QTextEdit, QGroupBox,
@@ -27,83 +27,175 @@ from PyQt6.QtWidgets import (
 
 from core import Instance, MinecraftManager, INST_DIR
 
-_CF_API_KEY = ""
-_MAX_CONCURRENT = 8
+_CF_API_KEY = "$2a$10$ikdeyDd1WBkPxFYhOxVAN.ZiJj6dPeAXte47fffCVxI6Ot6S3oEHm"
+_MAX_CONCURRENT = 6
+_USER_AGENT = "PhantomXLauncher/1.1.1 (hoanglonggg79@gmail.com)"
 
+MR_HEADERS = {
+    "User-Agent": _USER_AGENT,
+    "Accept": "*/*",
+}
+CF_HEADERS = {
+    "Accept": "application/json",
+    "x-api-key": _CF_API_KEY,
+    "User-Agent": _USER_AGENT,
+}
+_INSTANCE_NAME_RE = re.compile(r"^[a-zA-Z0-9_\- ]+$")
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# MODPACK INSTALL WORKER
-# ═══════════════════════════════════════════════════════════════════════════════
+class _InstallCancelled(Exception):
+
+def validate_instance_name(name: str) -> str:
+
+    name = name.strip()
+    if not name:
+        raise ValueError("Tên instance không được để trống.")
+    if not _INSTANCE_NAME_RE.fullmatch(name):
+        raise ValueError(
+            "Tên instance chỉ được chứa chữ cái, số, dấu gạch dưới (_), "
+            "dấu gạch ngang (-) và khoảng trắng."
+        )
+    return name
+
+def _safe_extract_zip(zf: zipfile.ZipFile, dest: Path, interrupt_check=None) -> None:
+
+    dest_root = dest.resolve()
+    dest_root.mkdir(parents=True, exist_ok=True)
+
+    for member in zf.infolist():
+        if interrupt_check and interrupt_check():
+            raise _InstallCancelled()
+
+        if not member.filename or member.filename == "/":
+            continue
+
+        target = (dest_root / member.filename).resolve()
+        if not target.is_relative_to(dest_root):
+            raise ValueError(f"Unsafe ZIP path detected: {member.filename}")
+
+        if member.is_dir() or member.filename.endswith("/"):
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with zf.open(member) as src, open(target, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+
+def _verify_downloaded_file(path: Path, label: str) -> None:
+    if not path.exists():
+        raise IOError(f"Download verification failed: {label} was not written to disk")
+    if path.stat().st_size == 0:
+        path.unlink(missing_ok=True)
+        raise IOError(f"Download verification failed: {label} is empty")
 
 class ModpackInstallWorker(QThread):
-    """Background worker that installs a modpack and creates a launcher instance."""
 
-    log     = pyqtSignal(str)          # log messages (forwarded to Log tab)
-    progress = pyqtSignal(int, int, str)  # current, total, status
-    done    = pyqtSignal(bool, str)    # success, instance_name
+    log = pyqtSignal(str)
+    progress = pyqtSignal(int, int, str)
+    done = pyqtSignal(bool, str)
 
     def __init__(
         self,
         zip_path: str,
         instance_name: str,
         mgr: MinecraftManager,
+        is_overwrite: bool = False,
         parent=None,
     ):
         super().__init__(parent)
         self.zip_path = Path(zip_path)
         self.instance_name = instance_name
         self.mgr = mgr
-        self.instance_dir = INST_DIR / instance_name
-        self.temp_dir = self.instance_dir / "_temp_pack"
-        self.mods_dir = self.instance_dir / "mods"
+        self.is_overwrite = is_overwrite
+        self.final_dir = INST_DIR / instance_name
+        self.staging_dir = INST_DIR / f"_staging_{instance_name}_{uuid.uuid4().hex[:8]}"
+        self.instance_dir = self.staging_dir
+        self.temp_dir = self.staging_dir / "_temp_pack"
+        self.mods_dir = self.staging_dir / "mods"
         self.pack_type: Optional[str] = None
+        self._committed = False
+        self._async_tasks: list[asyncio.Task] = []
 
     def run(self):
         try:
+            self._check_cancelled()
             self._log(f"=== ĐANG CÀI MODPACK: {self.instance_name} ===")
-            manifest = self._extract_and_parse()
-            version_id, loader_type, loader_ver = self._setup_loader(manifest)
+            if self.is_overwrite:
+                self._log("  Chế độ: Ghi đè instance hiện có (staging an toàn)")
 
-            # Download mods
+            manifest = self._extract_and_parse()
+            self._check_cancelled()
+            version_id, loader_type, loader_ver = self._setup_loader(manifest)
+            self._check_cancelled()
+
             if AIOHTTP_AVAILABLE:
-                asyncio.run(self._download_mods(manifest))
+                loop = asyncio.new_event_loop()
+                try:
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(self._download_mods(manifest))
+                finally:
+                    loop.close()
+                    asyncio.set_event_loop(None)
             else:
                 self._download_mods_sync(manifest)
 
+            self._check_cancelled()
             self._apply_overrides()
+            self._check_cancelled()
+            self._commit_install()
 
-            # Create and register instance in the launcher
             inst = Instance(
                 name=self.instance_name,
                 version_id=version_id,
                 loader=loader_type,
                 loader_version=loader_ver,
-                game_dir=str(self.instance_dir),
+                game_dir=str(self.final_dir),
             )
             inst.save()
 
             self._log(f"✅ Instance '{self.instance_name}' đã được tạo thành công!")
             self.done.emit(True, self.instance_name)
 
+        except _InstallCancelled:
+            self._log("⏹ Cài đặt đã bị hủy.")
+            self.done.emit(False, self.instance_name)
         except Exception as e:
             self._log(f"❌ Lỗi khi cài modpack: {e}")
             logger.exception(f"ModpackInstallWorker error: {e}")
             self.done.emit(False, self.instance_name)
         finally:
-            if self.temp_dir.exists():
-                shutil.rmtree(self.temp_dir, ignore_errors=True)
+            self._cleanup()
+
+    def _check_cancelled(self) -> None:
+        if self.isInterruptionRequested():
+            raise _InstallCancelled()
 
     def _log(self, msg: str):
         logger.info(msg)
         self.log.emit(msg)
 
-    # ── Extract & detect format ───────────────────────────────────────────────
+    def _commit_install(self) -> None:
+
+        if self.final_dir.exists():
+            shutil.rmtree(self.final_dir, ignore_errors=True)
+        self.staging_dir.rename(self.final_dir)
+        self.instance_dir = self.final_dir
+        self.mods_dir = self.final_dir / "mods"
+        self.temp_dir = self.final_dir / "_temp_pack"
+        self._committed = True
+
+    def _cleanup(self) -> None:
+        if self.temp_dir.exists():
+            shutil.rmtree(self.temp_dir, ignore_errors=True)
+        if not self._committed and self.staging_dir.exists():
+            shutil.rmtree(self.staging_dir, ignore_errors=True)
 
     def _extract_and_parse(self) -> dict:
         self._log("📂 Đang giải nén tệp lưu trữ modpack...")
-        self.instance_dir.mkdir(parents=True, exist_ok=True)
+        self.staging_dir.mkdir(parents=True, exist_ok=True)
+        self.temp_dir.mkdir(parents=True, exist_ok=True)
+
         with zipfile.ZipFile(self.zip_path, "r") as zf:
-            zf.extractall(self.temp_dir)
+            _safe_extract_zip(zf, self.temp_dir, interrupt_check=self.isInterruptionRequested)
 
         if (self.temp_dir / "manifest.json").exists():
             self.pack_type = "curseforge"
@@ -111,19 +203,16 @@ class ModpackInstallWorker(QThread):
             return json.loads(
                 (self.temp_dir / "manifest.json").read_text(encoding="utf-8")
             )
-        elif (self.temp_dir / "modrinth.index.json").exists():
+        if (self.temp_dir / "modrinth.index.json").exists():
             self.pack_type = "modrinth"
             self._log("  Detected: Modrinth format")
             return json.loads(
                 (self.temp_dir / "modrinth.index.json").read_text(encoding="utf-8")
             )
-        else:
-            raise ValueError(
-                "Unsupported modpack format: expected CurseForge manifest.json "
-                "or Modrinth modrinth.index.json"
-            )
-
-    # ── Loader installation ───────────────────────────────────────────────────
+        raise ValueError(
+            "Unsupported modpack format: expected CurseForge manifest.json "
+            "or Modrinth modrinth.index.json"
+        )
 
     def _setup_loader(self, manifest: dict) -> tuple[str, str, str]:
         self._log("⚙️  Thiết lập game gốc & loader...")
@@ -133,34 +222,29 @@ class ModpackInstallWorker(QThread):
             mc_ver = manifest["minecraft"]["version"]
             loaders = manifest["minecraft"]["modLoaders"]
             primary = next((l for l in loaders if l.get("primary")), loaders[0])
-            loader_id: str = primary["id"]  # e.g. "forge-47.2.0" or "neoforge-21.1.12"
+            loader_id: str = primary["id"]
 
             self._install_vanilla(mc_ver, gdir)
 
-            # IMPORTANT: check neoforge BEFORE forge to avoid substring match bug
-            if loader_id.startswith("neoforge-") or "neoforge" in loader_id.split("-")[0]:
-                loader_type = "neoforge"
-                loader_ver = loader_id.replace("neoforge-", "", 1)
+            parts = loader_id.split("-", 1)
+            loader_kind = parts[0].lower()
+            loader_ver = parts[1] if len(parts) > 1 else ""
+
+            if loader_kind == "neoforge":
                 self._install_neoforge(mc_ver, loader_ver, gdir)
-            elif "forge" in loader_id:
-                loader_type = "forge"
-                loader_ver = loader_id.replace("forge-", "", 1)
+                return mc_ver, "neoforge", loader_ver
+            if loader_kind == "forge":
                 self._install_forge(mc_ver, loader_ver, gdir)
-            elif "fabric" in loader_id:
-                loader_type = "fabric"
-                loader_ver = loader_id.replace("fabric-", "", 1)
+                return mc_ver, "forge", loader_ver
+            if loader_kind == "fabric":
                 self._install_fabric(mc_ver, loader_ver, gdir)
-            elif "quilt" in loader_id:
-                loader_type = "quilt"
-                loader_ver = loader_id.replace("quilt-", "", 1)
+                return mc_ver, "fabric", loader_ver
+            if loader_kind == "quilt":
                 self._install_quilt(mc_ver, loader_ver, gdir)
-            else:
-                loader_type = "vanilla"
-                loader_ver = ""
+                return mc_ver, "quilt", loader_ver
+            return mc_ver, "vanilla", ""
 
-            return mc_ver, loader_type, loader_ver
-
-        elif self.pack_type == "modrinth":
+        if self.pack_type == "modrinth":
             deps = manifest.get("dependencies", {})
             mc_ver = deps.get("minecraft")
             if not mc_ver:
@@ -172,20 +256,19 @@ class ModpackInstallWorker(QThread):
                 loader_ver = deps["fabric-loader"]
                 self._install_fabric(mc_ver, loader_ver, gdir)
                 return mc_ver, "fabric", loader_ver
-            elif "neoforge" in deps:
+            if "neoforge" in deps:
                 loader_ver = deps["neoforge"]
                 self._install_neoforge(mc_ver, loader_ver, gdir)
                 return mc_ver, "neoforge", loader_ver
-            elif "forge" in deps:
+            if "forge" in deps:
                 loader_ver = deps["forge"]
                 self._install_forge(mc_ver, loader_ver, gdir)
                 return mc_ver, "forge", loader_ver
-            elif "quilt-loader" in deps:
+            if "quilt-loader" in deps:
                 loader_ver = deps["quilt-loader"]
                 self._install_quilt(mc_ver, loader_ver, gdir)
                 return mc_ver, "quilt", loader_ver
-            else:
-                return mc_ver, "vanilla", ""
+            return mc_ver, "vanilla", ""
 
         raise ValueError(f"Unknown pack type: {self.pack_type}")
 
@@ -207,88 +290,259 @@ class ModpackInstallWorker(QThread):
         java = self.mgr.find_java() or "java"
         self.mgr.install_neoforge(mc_ver, loader_ver, gdir, java_path=java, cb_log=self._log)
 
-    # ── Mod download (async) ──────────────────────────────────────────────────
-
     async def _download_mods(self, manifest: dict):
         self._log("⬇️  Đang tải mods...")
         self.mods_dir.mkdir(parents=True, exist_ok=True)
         files = manifest.get("files", [])
-        if not files:
+        total = len(files)
+        if not total:
             self._log("  Không có tệp nào để tải xuống.")
             return
 
-        connector = aiohttp.TCPConnector(limit=_MAX_CONCURRENT)
-        async with aiohttp.ClientSession(connector=connector) as session:
-            if self.pack_type == "curseforge":
-                tasks = [self._dl_cf_mod(session, f) for f in files]
-            else:
-                tasks = [self._dl_mr_mod(session, f) for f in files]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            failed = sum(1 for r in results if isinstance(r, Exception))
-            if failed:
-                self._log(f"  ⚠️  {failed} file(s) failed to download")
+        self.progress.emit(0, total, "Preparing downloads...")
 
-    async def _dl_cf_mod(self, session: "aiohttp.ClientSession", file_info: dict):
-        headers = {
-            "Accept": "application/json",
-            "x-api-key": _CF_API_KEY,
-        }
-        url = (
-            f"https://api.curseforge.com/v1/mods/"
-            f"{file_info['projectID']}/files/{file_info['fileID']}"
-        )
+        timeout = aiohttp.ClientTimeout(total=180, sock_connect=30, sock_read=120)
+        connector = aiohttp.TCPConnector(limit=_MAX_CONCURRENT)
+
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            tasks: list[asyncio.Task] = []
+            for file_info in files:
+                self._check_cancelled()
+                if self.pack_type == "curseforge":
+                    tasks.append(asyncio.create_task(self._dl_cf_mod(session, file_info)))
+                else:
+                    tasks.append(asyncio.create_task(self._dl_mr_mod(session, file_info)))
+            self._async_tasks = tasks
+
+            completed = 0
+            failed_required = 0
+            for finished in asyncio.as_completed(tasks):
+                if self.isInterruptionRequested():
+                    for task in tasks:
+                        task.cancel()
+                    raise _InstallCancelled()
+                try:
+                    label = await finished
+                    completed += 1
+                    self.progress.emit(
+                        completed,
+                        total,
+                        f"Downloading mods... {completed} / {total} — {label}",
+                    )
+                except _InstallCancelled:
+                    raise
+                except Exception as e:
+                    completed += 1
+                    if isinstance(e, _OptionalDownloadFailed):
+                        self._log(f"  ⚠️  Optional file skipped: {e.label}")
+                        self.progress.emit(
+                            completed,
+                            total,
+                            f"Downloading mods... {completed} / {total}",
+                        )
+                    else:
+                        failed_required += 1
+                        self.progress.emit(
+                            completed,
+                            total,
+                            f"Downloading mods... {completed} / {total}",
+                        )
+
+            if failed_required:
+                raise Exception(f"{failed_required} required file(s) failed to download")
+
+    async def _dl_cf_mod(self, session: "aiohttp.ClientSession", file_info: dict) -> str:
+        self._check_cancelled()
+        required = file_info.get("required", True)
+        project_id = file_info["projectID"]
+        file_id = file_info["fileID"]
+        label = f"project {project_id} / file {file_id}"
+
         try:
-            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                if resp.status == 200:
-                    data = (await resp.json())["data"]
-                    dl_url = data.get("downloadUrl")
-                    file_name = data["fileName"]
-                    if dl_url:
-                        async with session.get(dl_url, timeout=aiohttp.ClientTimeout(total=120)) as fr:
-                            if fr.status == 200:
-                                content = await fr.read()
-                                (self.mods_dir / file_name).write_bytes(content)
-                                self._log(f"  ✔️  {file_name}")
+            meta_url = f"https://api.curseforge.com/v1/mods/{project_id}/files/{file_id}"
+            async with session.get(meta_url, headers=CF_HEADERS) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    raise Exception(
+                        f"CurseForge metadata HTTP {resp.status} for {label}: {body[:200]}"
+                    )
+                data = (await resp.json())["data"]
+                file_name = data["fileName"]
+                label = file_name
+                dl_url = data.get("downloadUrl")
+
+            if not dl_url:
+                self._log(f"  ⚠ downloadUrl is null -> trying fallback endpoint: {file_name}")
+                dl_url = (
+                    f"https://www.curseforge.com/api/v1/mods/{project_id}/files/{file_id}/download"
+                )
+
+            self._check_cancelled()
+            async with session.get(dl_url, headers=CF_HEADERS) as fr:
+                if fr.status != 200:
+                    raise Exception(
+                        f"CurseForge download HTTP {fr.status} for {file_name}"
+                    )
+                content = await fr.read()
+
+            dest = self.mods_dir / file_name
+            dest.write_bytes(content)
+            _verify_downloaded_file(dest, file_name)
+            self._log(f"  ✔️  {file_name}")
+            return file_name
+
         except Exception as e:
-            self._log(f"  ❌ CurseForge download failed: {e}")
+            msg = str(e)
+            if not required:
+                raise _OptionalDownloadFailed(label, msg) from e
+            self._log(
+                f"  ❌ Failed to download: {label}\n\n"
+                f"Project ID: {project_id}\n"
+                f"File ID: {file_id}\n\n"
+                f"{msg}"
+            )
             raise
 
-    async def _dl_mr_mod(self, session: "aiohttp.ClientSession", file_info: dict):
+    async def _dl_mr_mod(self, session: "aiohttp.ClientSession", file_info: dict) -> str:
+        self._check_cancelled()
+        label = file_info.get("path", "unknown")
         dl_url = file_info.get("downloads", [None])[0]
         if not dl_url:
-            return
+            raise Exception(f"Modrinth download URL missing for {label}")
+
         try:
             dest_path = self.instance_dir / file_info["path"]
             dest_path.parent.mkdir(parents=True, exist_ok=True)
-            async with session.get(dl_url, timeout=aiohttp.ClientTimeout(total=120)) as resp:
-                if resp.status == 200:
-                    content = await resp.read()
-                    dest_path.write_bytes(content)
-                    self._log(f"  ✔️  {file_info['path']}")
+            async with session.get(dl_url, headers=MR_HEADERS) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    raise Exception(
+                        f"Modrinth download HTTP {resp.status} for {label}: {body[:200]}"
+                    )
+                content = await resp.read()
+
+            dest_path.write_bytes(content)
+            _verify_downloaded_file(dest_path, label)
+            self._log(f"  ✔️  {label}")
+            return label
+
         except Exception as e:
-            self._log(f"  ❌ Modrinth download failed: {e}")
+            self._log(f"  ❌ Modrinth download failed for {label}: {e}")
             raise
 
     def _download_mods_sync(self, manifest: dict):
         import requests
+
         self._log("⬇️  Đang tải mods (sync mode)...")
         files = manifest.get("files", [])
         self.mods_dir.mkdir(parents=True, exist_ok=True)
-        for file_info in files:
-            if self.pack_type == "modrinth":
-                dl_url = file_info.get("downloads", [None])[0]
-                if dl_url:
-                    try:
-                        dest = self.instance_dir / file_info["path"]
-                        dest.parent.mkdir(parents=True, exist_ok=True)
-                        r = requests.get(dl_url, timeout=120)
-                        if r.status_code == 200:
-                            dest.write_bytes(r.content)
-                            self._log(f"  ✔️  {file_info['path']}")
-                    except Exception as e:
-                        self._log(f"  ❌ {e}")
+        total = len(files)
+        if not total:
+            self._log("  Không có tệp nào để tải xuống.")
+            return
 
-    # ── Apply overrides ───────────────────────────────────────────────────────
+        self.progress.emit(0, total, "Preparing downloads...")
+        failed_required = 0
+        completed = 0
+
+        for file_info in files:
+            self._check_cancelled()
+            try:
+                if self.pack_type == "curseforge":
+                    label = self._dl_cf_mod_sync(requests, file_info)
+                else:
+                    label = self._dl_mr_mod_sync(requests, file_info)
+                completed += 1
+                self.progress.emit(
+                    completed,
+                    total,
+                    f"Downloading mods... {completed} / {total} — {label}",
+                )
+            except _InstallCancelled:
+                raise
+            except _OptionalDownloadFailed as e:
+                completed += 1
+                self._log(f"  ⚠️  Optional file skipped: {e.label}")
+                self.progress.emit(
+                    completed,
+                    total,
+                    f"Downloading mods... {completed} / {total}",
+                )
+            except Exception:
+                completed += 1
+                failed_required += 1
+                self.progress.emit(
+                    completed,
+                    total,
+                    f"Downloading mods... {completed} / {total}",
+                )
+
+        if failed_required:
+            raise Exception(f"{failed_required} required file(s) failed to download")
+
+    def _dl_cf_mod_sync(self, requests_mod, file_info: dict) -> str:
+        required = file_info.get("required", True)
+        project_id = file_info["projectID"]
+        file_id = file_info["fileID"]
+        label = f"project {project_id} / file {file_id}"
+
+        try:
+            meta_url = f"https://api.curseforge.com/v1/mods/{project_id}/files/{file_id}"
+            resp = requests_mod.get(meta_url, headers=CF_HEADERS, timeout=30)
+            if resp.status_code != 200:
+                raise Exception(
+                    f"CurseForge metadata HTTP {resp.status_code} for {label}: {resp.text[:200]}"
+                )
+            data = resp.json()["data"]
+            file_name = data["fileName"]
+            label = file_name
+            dl_url = data.get("downloadUrl")
+
+            if not dl_url:
+                self._log(f"  ⚠ downloadUrl is null -> trying fallback endpoint: {file_name}")
+                dl_url = (
+                    f"https://www.curseforge.com/api/v1/mods/{project_id}/files/{file_id}/download"
+                )
+
+            self._check_cancelled()
+            fr = requests_mod.get(dl_url, headers=CF_HEADERS, timeout=180)
+            if fr.status_code != 200:
+                raise Exception(f"CurseForge download HTTP {fr.status_code} for {file_name}")
+
+            dest = self.mods_dir / file_name
+            dest.write_bytes(fr.content)
+            _verify_downloaded_file(dest, file_name)
+            self._log(f"  ✔️  {file_name}")
+            return file_name
+
+        except Exception as e:
+            if not required:
+                raise _OptionalDownloadFailed(label, str(e)) from e
+            self._log(
+                f"  ❌ Failed to download: {label}\n\n"
+                f"Project ID: {project_id}\n"
+                f"File ID: {file_id}\n\n"
+                f"{e}"
+            )
+            raise
+
+    def _dl_mr_mod_sync(self, requests_mod, file_info: dict) -> str:
+        label = file_info.get("path", "unknown")
+        dl_url = file_info.get("downloads", [None])[0]
+        if not dl_url:
+            raise Exception(f"Modrinth download URL missing for {label}")
+
+        dest = self.instance_dir / file_info["path"]
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        resp = requests_mod.get(dl_url, headers=MR_HEADERS, timeout=180)
+        if resp.status_code != 200:
+            raise Exception(
+                f"Modrinth download HTTP {resp.status_code} for {label}: {resp.text[:200]}"
+            )
+        dest.write_bytes(resp.content)
+        _verify_downloaded_file(dest, label)
+        self._log(f"  ✔️  {label}")
+        return label
 
     def _apply_overrides(self):
         self._log("🚚 Đang áp dụng ghi đè / cấu hình...")
@@ -297,6 +551,7 @@ class ModpackInstallWorker(QThread):
             if not ov_path.exists():
                 continue
             for item in ov_path.iterdir():
+                self._check_cancelled()
                 dst = self.instance_dir / item.name
                 try:
                     if item.is_dir():
@@ -307,14 +562,14 @@ class ModpackInstallWorker(QThread):
                     self._log(f"  ⚠️  Override copy error: {e}")
             self._log(f"  ✔️  Applied overrides from '{ov_folder}'")
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# MODPACK TAB
-# ═══════════════════════════════════════════════════════════════════════════════
+class _OptionalDownloadFailed(Exception):
+    def __init__(self, label: str, reason: str):
+        self.label = label
+        self.reason = reason
+        super().__init__(reason)
 
 class ModpackTab(QWidget):
     instance_created = pyqtSignal(str)
-    # Forwarded from worker — connected by main_window to the Log tab
     log = pyqtSignal(str)
 
     def __init__(self, mgr: MinecraftManager, inst_tab, parent=None):
@@ -327,7 +582,6 @@ class ModpackTab(QWidget):
     def _build_ui(self):
         layout = QVBoxLayout(self)
 
-        # Header
         h = QHBoxLayout()
         lbl = QLabel("📦 Trình Cài Đặt Modpack")
         lbl.setObjectName("header")
@@ -338,11 +592,9 @@ class ModpackTab(QWidget):
         h.addWidget(note)
         layout.addLayout(h)
 
-        # Setup group
         setup_grp = QGroupBox("Tạo Instance Mới từ Modpack")
         setup_l = QVBoxLayout(setup_grp)
 
-        # Instance name
         name_row = QHBoxLayout()
         name_row.addWidget(QLabel("Tên Instance:"))
         self.name_edit = QLineEdit()
@@ -350,7 +602,6 @@ class ModpackTab(QWidget):
         name_row.addWidget(self.name_edit)
         setup_l.addLayout(name_row)
 
-        # File picker
         file_row = QHBoxLayout()
         file_row.addWidget(QLabel("File Modpack:"))
         self.file_edit = QLineEdit()
@@ -366,13 +617,12 @@ class ModpackTab(QWidget):
             "ℹ️  Mọi yêu cầu của modpack (như phiên bản Minecraft, Loader) sẽ được cài đặt tự động"
             "và chuẩn đét cho Instance."
         )
-        info_lbl.setStyleSheet("color: #a6adc8; font-size: 11px;")
+        info_lbl.setStyleSheet("color: 
         info_lbl.setWordWrap(True)
         setup_l.addWidget(info_lbl)
 
         layout.addWidget(setup_grp)
 
-        # Action row
         btn_row = QHBoxLayout()
         self.install_btn = QPushButton("📦 Cài đặt Modpack")
         self.install_btn.setObjectName("success")
@@ -387,17 +637,15 @@ class ModpackTab(QWidget):
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
-        # Progress
         self.status_lbl = QLabel("")
         self.status_lbl.setObjectName("subtitle")
         layout.addWidget(self.status_lbl)
 
         self.prog_bar = QProgressBar()
-        self.prog_bar.setRange(0, 0)  # indeterminate
+        self.prog_bar.setRange(0, 0)
         self.prog_bar.setVisible(False)
         layout.addWidget(self.prog_bar)
 
-        # Log
         log_grp = QGroupBox("Installation Log")
         log_l = QVBoxLayout(log_grp)
         self.log_text = QTextEdit()
@@ -413,17 +661,15 @@ class ModpackTab(QWidget):
         )
         if path:
             self.file_edit.setText(path)
-            # Auto-fill instance name from filename if empty
             if not self.name_edit.text().strip():
-                stem = Path(path).stem
-                self.name_edit.setText(stem)
+                self.name_edit.setText(Path(path).stem)
 
     def _append_log(self, msg: str):
         ts = datetime.now().strftime("%H:%M:%S")
         safe = msg.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         self.log_text.append(
-            f'<span style="color:#6c7086">[{ts}]</span> '
-            f'<span style="color:#cdd6f4">{safe}</span>'
+            f'<span style="color:
+            f'<span style="color:
         )
         self.log_text.ensureCursorVisible()
 
@@ -431,18 +677,25 @@ class ModpackTab(QWidget):
         if self._worker and self._worker.isRunning():
             return
 
-        name = self.name_edit.text().strip()
+        raw_name = self.name_edit.text()
         zip_path = self.file_edit.text().strip()
 
-        if not name:
-            QMessageBox.warning(self, "Bắt buộc", "Vui lòng nhập tên instance.")
+        try:
+            name = validate_instance_name(raw_name)
+        except ValueError as e:
+            QMessageBox.warning(self, "Tên không hợp lệ", str(e))
             return
+
         if not zip_path or not Path(zip_path).exists():
             QMessageBox.warning(self, "Bắt buộc", "Vui lòng chọn một file modpack hợp lệ.")
             return
 
-        # Check for duplicate instance name
-        if name in self.inst_tab.instances:
+        instance_exists = (
+            name in self.inst_tab.instances
+            or (INST_DIR / name).exists()
+        )
+        is_overwrite = False
+        if instance_exists:
             reply = QMessageBox.question(
                 self, "Instance đã tồn tại",
                 f"Instance có tên '{name}' đã tồn tại.\n"
@@ -451,26 +704,30 @@ class ModpackTab(QWidget):
             )
             if reply != QMessageBox.StandardButton.Yes:
                 return
+            is_overwrite = True
 
         self.log_text.clear()
         self._append_log(f"📦 Bắt đầu cài đặt modpack: {name}")
         self.install_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
         self.prog_bar.setVisible(True)
+        self.prog_bar.setRange(0, 0)
         self.status_lbl.setText("Đang cài đặt...")
 
-        self._worker = ModpackInstallWorker(zip_path, name, self.mgr)
+        self._worker = ModpackInstallWorker(
+            zip_path, name, self.mgr, is_overwrite=is_overwrite
+        )
         self._worker.log.connect(self._append_log)
-        self._worker.log.connect(self.log)   # forward to main window Log tab
+        self._worker.log.connect(self.log)
         self._worker.progress.connect(self._on_progress)
         self._worker.done.connect(self._on_done)
         self._worker.start()
 
     def _cancel(self):
         if self._worker and self._worker.isRunning():
-            self._worker.terminate()
-        self._reset_ui()
-        self._append_log("⏹ Cài đặt đã bị hủy.")
+            self.cancel_btn.setEnabled(False)
+            self.status_lbl.setText("Đang hủy...")
+            self._worker.requestInterruption()
 
     def _on_progress(self, current: int, total: int, status: str):
         self.status_lbl.setText(status)
@@ -494,11 +751,12 @@ class ModpackTab(QWidget):
                 f"Chọn nó trong tab Instances để khởi động.",
             )
         else:
-            self._append_log("❌ Cài đặt modpack thất bại. Kiểm tra log bên trên.")
-            QMessageBox.critical(
-                self, "Install Failed",
-                "Modpack installation failed.\nCheck the log for details.",
-            )
+            if not (self._worker and self._worker.isInterruptionRequested()):
+                self._append_log("❌ Cài đặt modpack thất bại. Kiểm tra log bên trên.")
+                QMessageBox.critical(
+                    self, "Install Failed",
+                    "Modpack installation failed.\nCheck the log for details.",
+                )
 
     def _reset_ui(self):
         self.install_btn.setEnabled(True)
