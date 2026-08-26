@@ -37,6 +37,7 @@ from ui_tabs import (
 from ui_repair import RepairTab
 from ui_modpack import ModpackTab
 
+
 class MainWindow(QMainWindow):
     update_available = pyqtSignal(str)
 
@@ -67,6 +68,7 @@ class MainWindow(QMainWindow):
         self.update_rpc_launcher()
         self._check_updates()
 
+    # ── UI construction ───────────────────────────────────────────────────────
     def _build_ui(self):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
@@ -82,9 +84,10 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
+        # Top bar
         topbar = QWidget()
         topbar.setStyleSheet(
-            "background:
+            "background:#181825; border-bottom:1px solid #313244;"
         )
         tl = QHBoxLayout(topbar)
         tl.setContentsMargins(16, 8, 16, 8)
@@ -122,8 +125,9 @@ class MainWindow(QMainWindow):
 
         root.addWidget(topbar)
 
+        # Progress bar row
         prog_widget = QWidget()
-        prog_widget.setStyleSheet("background:
+        prog_widget.setStyleSheet("background:#181825;")
         pl = QHBoxLayout(prog_widget)
         pl.setContentsMargins(16, 4, 16, 4)
         self.prog_label = QLabel("")
@@ -133,6 +137,7 @@ class MainWindow(QMainWindow):
         pl.addWidget(self.prog_bar)
         root.addWidget(prog_widget)
 
+        # Tabs
         self.tabs = QTabWidget()
         root.addWidget(self.tabs)
 
@@ -157,6 +162,7 @@ class MainWindow(QMainWindow):
         self.settings_tab = SettingsTab(self.mgr)
         self.tabs.addTab(self.settings_tab, "⚙️ Cài Đặt")
 
+    # ── Signal wiring ─────────────────────────────────────────────────────────
     def _connect_signals(self):
         self.signals.log.connect(lambda m, l: self.log_tab.append(m, l))
         self.signals.progress.connect(self._on_progress)
@@ -177,15 +183,18 @@ class MainWindow(QMainWindow):
             lambda m: self.signals.log.emit(m, "SUCCESS")
         )
 
+        # Modpack tab: forward log to log tab, refresh instances on completion
         self.modpack_tab.log.connect(
             lambda m: self.signals.log.emit(m, "INFO")
         )
         self.modpack_tab.instance_created.connect(self._on_modpack_installed)
 
+        # Repair tab: forward log to log tab
         self.repair_tab.repair_log.connect(
             lambda m: self.signals.log.emit(m, "INFO")
         )
 
+    # ── Config ────────────────────────────────────────────────────────────────
     def _load_config(self):
         cfg: dict = {}
         if CONFIG_FILE.exists():
@@ -214,14 +223,14 @@ class MainWindow(QMainWindow):
         if idx >= 0:
             self.quick_inst_combo.setCurrentIndex(idx)
         self.market_tab.refresh_instances()
-        
+        # Refresh new tabs
         try:
             self.repair_tab.refresh_instances()
         except Exception:
             pass
 
     def _on_modpack_installed(self, instance_name: str):
-
+        """Called when ModpackTab finishes installing a modpack."""
         self.inst_tab.load_instances()
         self._refresh_quick_combo()
         self.signals.log.emit(
@@ -229,6 +238,7 @@ class MainWindow(QMainWindow):
         )
         self.signals.status_msg.emit(f"✅ Modpack đã sẵn sàng: {instance_name}")
 
+    # ── Java check ────────────────────────────────────────────────────────────
     def _check_java_async(self):
         def task():
             cfg = self.settings_tab.get()
@@ -239,6 +249,7 @@ class MainWindow(QMainWindow):
 
         threading.Thread(target=task, daemon=True).start()
 
+    # ── Instance selection ───────────────────────────────────────────────────
     def _on_inst_selection_changed(self):
         inst = self.inst_tab._selected_instance()
         if inst:
@@ -255,6 +266,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.debug(f"Progress UI update error: {e}")
 
+    # ── Install ───────────────────────────────────────────────────────────────
     def _install_instance(self, inst: Instance):
         if self.install_worker and self.install_worker.isRunning():
             QMessageBox.warning(
@@ -296,6 +308,7 @@ class MainWindow(QMainWindow):
                 f"Không thể cài đặt '{name}'.\nKiểm tra tab Log để biết chi tiết."
             )
 
+    # ── Launch ────────────────────────────────────────────────────────────────
     def _get_launch_params(self) -> tuple[str, int, str, str, str, str]:
         cfg = self.settings_tab.get()
         username = cfg.get("username", "").strip()
@@ -509,11 +522,12 @@ class MainWindow(QMainWindow):
         logger.info("PhantomX closing")
         event.accept()
 
+    # ── Update checker (non-blocking, soft prompt) ────────────────────────────
     def _check_updates(self):
         local_version = str(APP_VERSION).strip().lower().lstrip("v")
 
         def _ver_tuple(v: str):
-
+            """Convert '1.2.3' / '1.2' / '1.2.3-beta' → (1, 2, 3)"""
             try:
                 clean = v.split("-")[0].split("+")[0]
                 parts = [int(x) for x in clean.split(".") if x.isdigit() or x.isnumeric()]

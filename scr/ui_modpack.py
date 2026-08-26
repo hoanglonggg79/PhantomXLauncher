@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
 
 from core import Instance, MinecraftManager, INST_DIR
 
-_CF_API_KEY = "rick_roll"
+_CF_API_KEY = ""
 _MAX_CONCURRENT = 6
 _USER_AGENT = "PhantomXLauncher/1.1.1 (email)"
 
@@ -42,10 +42,13 @@ CF_HEADERS = {
 }
 _INSTANCE_NAME_RE = re.compile(r"^[a-zA-Z0-9_\- ]+$")
 
+
 class _InstallCancelled(Exception):
+    """Raised when the user requests cooperative cancellation."""
+
 
 def validate_instance_name(name: str) -> str:
-
+    """Whitelist instance names to prevent path traversal and invalid paths."""
     name = name.strip()
     if not name:
         raise ValueError("Tên instance không được để trống.")
@@ -56,8 +59,9 @@ def validate_instance_name(name: str) -> str:
         )
     return name
 
-def _safe_extract_zip(zf: zipfile.ZipFile, dest: Path, interrupt_check=None) -> None:
 
+def _safe_extract_zip(zf: zipfile.ZipFile, dest: Path, interrupt_check=None) -> None:
+    """Extract ZIP entries safely, preventing Zip Slip and directory read errors."""
     dest_root = dest.resolve()
     dest_root.mkdir(parents=True, exist_ok=True)
 
@@ -65,6 +69,7 @@ def _safe_extract_zip(zf: zipfile.ZipFile, dest: Path, interrupt_check=None) -> 
         if interrupt_check and interrupt_check():
             raise _InstallCancelled()
 
+        # Skip entries with empty names (some archives include them)
         if not member.filename or member.filename == "/":
             continue
 
@@ -80,6 +85,7 @@ def _safe_extract_zip(zf: zipfile.ZipFile, dest: Path, interrupt_check=None) -> 
         with zf.open(member) as src, open(target, "wb") as dst:
             shutil.copyfileobj(src, dst)
 
+
 def _verify_downloaded_file(path: Path, label: str) -> None:
     if not path.exists():
         raise IOError(f"Download verification failed: {label} was not written to disk")
@@ -87,7 +93,13 @@ def _verify_downloaded_file(path: Path, label: str) -> None:
         path.unlink(missing_ok=True)
         raise IOError(f"Download verification failed: {label} is empty")
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MODPACK INSTALL WORKER
+# ═══════════════════════════════════════════════════════════════════════════════
+
 class ModpackInstallWorker(QThread):
+    """Background worker that installs a modpack and creates a launcher instance."""
 
     log = pyqtSignal(str)
     progress = pyqtSignal(int, int, str)
@@ -174,7 +186,7 @@ class ModpackInstallWorker(QThread):
         self.log.emit(msg)
 
     def _commit_install(self) -> None:
-
+        """Atomically replace the old instance with the staged install."""
         if self.final_dir.exists():
             shutil.rmtree(self.final_dir, ignore_errors=True)
         self.staging_dir.rename(self.final_dir)
@@ -188,6 +200,8 @@ class ModpackInstallWorker(QThread):
             shutil.rmtree(self.temp_dir, ignore_errors=True)
         if not self._committed and self.staging_dir.exists():
             shutil.rmtree(self.staging_dir, ignore_errors=True)
+
+    # ── Extract & detect format ───────────────────────────────────────────────
 
     def _extract_and_parse(self) -> dict:
         self._log("📂 Đang giải nén tệp lưu trữ modpack...")
@@ -213,6 +227,8 @@ class ModpackInstallWorker(QThread):
             "Unsupported modpack format: expected CurseForge manifest.json "
             "or Modrinth modrinth.index.json"
         )
+
+    # ── Loader installation ───────────────────────────────────────────────────
 
     def _setup_loader(self, manifest: dict) -> tuple[str, str, str]:
         self._log("⚙️  Thiết lập game gốc & loader...")
@@ -289,6 +305,8 @@ class ModpackInstallWorker(QThread):
     def _install_neoforge(self, mc_ver: str, loader_ver: str, gdir: str):
         java = self.mgr.find_java() or "java"
         self.mgr.install_neoforge(mc_ver, loader_ver, gdir, java_path=java, cb_log=self._log)
+
+    # ── Mod download (async) ──────────────────────────────────────────────────
 
     async def _download_mods(self, manifest: dict):
         self._log("⬇️  Đang tải mods...")
@@ -544,6 +562,8 @@ class ModpackInstallWorker(QThread):
         self._log(f"  ✔️  {label}")
         return label
 
+    # ── Apply overrides ───────────────────────────────────────────────────────
+
     def _apply_overrides(self):
         self._log("🚚 Đang áp dụng ghi đè / cấu hình...")
         for ov_folder in ["overrides", "client-overrides"]:
@@ -562,11 +582,17 @@ class ModpackInstallWorker(QThread):
                     self._log(f"  ⚠️  Override copy error: {e}")
             self._log(f"  ✔️  Applied overrides from '{ov_folder}'")
 
+
 class _OptionalDownloadFailed(Exception):
     def __init__(self, label: str, reason: str):
         self.label = label
         self.reason = reason
         super().__init__(reason)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MODPACK TAB
+# ═══════════════════════════════════════════════════════════════════════════════
 
 class ModpackTab(QWidget):
     instance_created = pyqtSignal(str)
@@ -617,7 +643,7 @@ class ModpackTab(QWidget):
             "ℹ️  Mọi yêu cầu của modpack (như phiên bản Minecraft, Loader) sẽ được cài đặt tự động"
             "và chuẩn đét cho Instance."
         )
-        info_lbl.setStyleSheet("color: 
+        info_lbl.setStyleSheet("color: #a6adc8; font-size: 11px;")
         info_lbl.setWordWrap(True)
         setup_l.addWidget(info_lbl)
 
@@ -668,8 +694,8 @@ class ModpackTab(QWidget):
         ts = datetime.now().strftime("%H:%M:%S")
         safe = msg.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         self.log_text.append(
-            f'<span style="color:
-            f'<span style="color:
+            f'<span style="color:#6c7086">[{ts}]</span> '
+            f'<span style="color:#cdd6f4">{safe}</span>'
         )
         self.log_text.ensureCursorVisible()
 

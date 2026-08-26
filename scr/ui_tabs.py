@@ -36,16 +36,68 @@ from core import (
     ModSearchWorker, ModDownloadWorker, open_path,
 )
 
-DARK_QSS = 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STYLE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+DARK_QSS = """
+QMainWindow, QWidget { background: #1e1e2e; color: #cdd6f4; font-family: 'Segoe UI', Arial; font-size: 13px; }
+QTabWidget::pane { border: 1px solid #313244; background: #1e1e2e; }
+QTabBar::tab { background: #181825; color: #a6adc8; padding: 8px 18px; border: 1px solid #313244; border-bottom: none; border-radius: 4px 4px 0 0; }
+QTabBar::tab:selected { background: #313244; color: #cdd6f4; }
+QTabBar::tab:hover { background: #2a2a3e; }
+QPushButton { background: #89b4fa; color: #1e1e2e; border: none; border-radius: 6px; padding: 7px 16px; font-weight: bold; }
+QPushButton:hover { background: #74c7ec; }
+QPushButton:pressed { background: #89dceb; }
+QPushButton:disabled { background: #45475a; color: #6c7086; }
+QPushButton#danger { background: #f38ba8; }
+QPushButton#danger:hover { background: #eba0ac; }
+QPushButton#danger:disabled { background: #45475a; color: #6c7086; }
+QPushButton#success { background: #a6e3a1; }
+QPushButton#success:hover { background: #94e2d5; }
+QPushButton#success:disabled { background: #45475a; color: #6c7086; }
+QPushButton#market { background: #cba6f7; color: #1e1e2e; }
+QPushButton#market:hover { background: #b4befe; }
+QLineEdit, QComboBox, QSpinBox { background: #313244; border: 1px solid #45475a; border-radius: 5px; padding: 5px 8px; color: #cdd6f4; }
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus { border-color: #89b4fa; }
+QComboBox::drop-down { border: none; }
+QComboBox::down-arrow { image: none; width: 12px; }
+QTextEdit { background: #11111b; border: 1px solid #313244; border-radius: 5px; color: #cdd6f4; font-family: 'Consolas', 'Courier New', monospace; font-size: 12px; }
+QProgressBar { background: #313244; border: none; border-radius: 4px; height: 8px; text-align: center; color: transparent; }
+QProgressBar::chunk { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #89b4fa, stop:1 #cba6f7); border-radius: 4px; }
+QListWidget { background: #181825; border: 1px solid #313244; border-radius: 5px; color: #cdd6f4; }
+QListWidget::item:selected { background: #313244; color: #89b4fa; }
+QListWidget::item:hover { background: #2a2a3e; }
+QGroupBox { border: 1px solid #313244; border-radius: 6px; margin-top: 10px; padding-top: 6px; color: #89b4fa; font-weight: bold; }
+QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }
+QScrollBar:vertical { background: #181825; width: 8px; }
+QScrollBar::handle:vertical { background: #45475a; border-radius: 4px; min-height: 20px; }
+QLabel#header { font-size: 20px; font-weight: bold; color: #89b4fa; }
+QLabel#subtitle { color: #a6adc8; font-size: 11px; }
+QLabel#watermark { color: #585b70; font-size: 10px; }
+QStatusBar { background: #181825; color: #6c7086; border-top: 1px solid #313244; }
+QCheckBox { color: #cdd6f4; spacing: 6px; }
+QCheckBox::indicator { width: 14px; height: 14px; border: 2px solid #45475a; border-radius: 3px; background: #313244; }
+QCheckBox::indicator:checked { background: #89b4fa; border-color: #89b4fa; }
+QSlider::groove:horizontal { background: #313244; height: 4px; border-radius: 2px; }
+QSlider::handle:horizontal { background: #89b4fa; width: 12px; height: 12px; border-radius: 6px; margin: -4px 0; }
+QSlider::sub-page:horizontal { background: #89b4fa; border-radius: 2px; }
+"""
 
 LOG_COLORS = {
-    "INFO": "
-    "SUCCESS": "
-    "WARN": "
-    "ERROR": "
-    "DEBUG": "
-    "GAME": "
+    "INFO": "#cdd6f4",
+    "SUCCESS": "#a6e3a1",
+    "WARN": "#f9e2af",
+    "ERROR": "#f38ba8",
+    "DEBUG": "#6c7086",
+    "GAME": "#89dceb",
 }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MUSIC PLAYER
+# ═══════════════════════════════════════════════════════════════════════════════
 
 class MusicPlayerWidget(QWidget):
     def __init__(self, parent=None):
@@ -153,6 +205,11 @@ class MusicPlayerWidget(QWidget):
         self.mute_btn.setChecked(muted)
         self._audio_out.setMuted(muted)
         self.mute_btn.setText("🔇" if muted else "🔊")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# INSTANCE TAB
+# ═══════════════════════════════════════════════════════════════════════════════
 
 class InstanceTab(QWidget):
     request_install = pyqtSignal(object)
@@ -290,6 +347,7 @@ class InstanceTab(QWidget):
 
     def get_instance(self, name: str) -> Optional[Instance]:
         return self.instances.get(name)
+
 
 class NewInstanceDialog(QDialog):
     def __init__(self, parent=None):
@@ -439,6 +497,11 @@ class NewInstanceDialog(QDialog):
             loader_version=self.lver_combo.currentText().strip(),
         )
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MOD TAB
+# ═══════════════════════════════════════════════════════════════════════════════
+
 class ModTab(QWidget):
     def __init__(self, mgr: MinecraftManager, parent=None):
         super().__init__(parent)
@@ -483,7 +546,7 @@ class ModTab(QWidget):
         layout.addLayout(btn_row)
 
         self.conflict_label = QLabel("")
-        self.conflict_label.setStyleSheet("color: 
+        self.conflict_label.setStyleSheet("color: #f38ba8;")
         layout.addWidget(self.conflict_label)
 
     def set_instance(self, inst: Instance):
@@ -502,11 +565,11 @@ class ModTab(QWidget):
         for m in self._mods:
             status = "✅" if m["enabled"] else "⛔"
             item = QListWidgetItem(
-                f"{status}  {m['filename']}  ({m['size_kb']} KB)  
+                f"{status}  {m['filename']}  ({m['size_kb']} KB)  #{m['sha1']}"
             )
             item.setData(Qt.ItemDataRole.UserRole, m)
             if not m["enabled"]:
-                item.setForeground(QColor("
+                item.setForeground(QColor("#6c7086"))
             self.mod_list.addItem(item)
 
         base_names = [
@@ -575,6 +638,11 @@ class ModTab(QWidget):
         mods_dir = self.current_instance.mods_dir
         mods_dir.mkdir(parents=True, exist_ok=True)
         open_path(str(mods_dir))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MARKETPLACE TAB
+# ═══════════════════════════════════════════════════════════════════════════════
 
 class MarketplaceTab(QWidget):
     install_signal = pyqtSignal(str)
@@ -912,6 +980,11 @@ class MarketplaceTab(QWidget):
         if slug:
             QDesktopServices.openUrl(QUrl(f"https://modrinth.com/mod/{slug}"))
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# LOG TAB
+# ═══════════════════════════════════════════════════════════════════════════════
+
 class LogTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -941,13 +1014,13 @@ class LogTab(QWidget):
         self._buffer: List[str] = []
 
     def append(self, msg: str, level: str = "INFO"):
-        color = LOG_COLORS.get(level, "
+        color = LOG_COLORS.get(level, "#cdd6f4")
         ts = datetime.now().strftime("%H:%M:%S")
         safe_msg = (
             msg.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         )
         html = (
-            f'<span style="color:
+            f'<span style="color:#6c7086">[{ts}]</span> '
             f'<span style="color:{color}">{safe_msg}</span>'
         )
         self.text.append(html)
@@ -968,6 +1041,11 @@ class LogTab(QWidget):
         if path:
             Path(path).write_text("\n".join(self._buffer), encoding="utf-8")
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SETTINGS TAB
+# ═══════════════════════════════════════════════════════════════════════════════
+
 class SettingsTab(QWidget):
     settings_saved = pyqtSignal()
 
@@ -985,6 +1063,7 @@ class SettingsTab(QWidget):
         inner = QWidget()
         layout = QVBoxLayout(inner)
 
+        # ── Offline Account ──────────────────────────────────────────────────
         offline_grp = QGroupBox("Tài khoản Offline")
         offline_l = QVBoxLayout(offline_grp)
         row = QHBoxLayout()
@@ -998,6 +1077,7 @@ class SettingsTab(QWidget):
         offline_l.addWidget(note)
         layout.addWidget(offline_grp)
 
+        # ── Java ─────────────────────────────────────────────────────────────
         java_grp = QGroupBox("Java")
         java_l = QVBoxLayout(java_grp)
 
@@ -1045,6 +1125,7 @@ class SettingsTab(QWidget):
 
         layout.addWidget(java_grp)
 
+        # ── Memory ───────────────────────────────────────────────────────────
         mem_grp = QGroupBox("Memory")
         mem_l = QVBoxLayout(mem_grp)
         row3 = QHBoxLayout()
@@ -1061,13 +1142,14 @@ class SettingsTab(QWidget):
         mem_l.addLayout(row3)
         layout.addWidget(mem_grp)
 
+        # ── Microsoft Account (COMING SOON) ──────────────────────────────────
         ms_grp = QGroupBox("Tài khoản Microsoft")
         ms_l = QVBoxLayout(ms_grp)
 
         coming_soon_lbl = QLabel(
             "⚠️  Đăng nhập Microsoft đang được <b>phát triển</b> — Hiện tại hãy sử dụng Offline mode."
         )
-        coming_soon_lbl.setStyleSheet("color: 
+        coming_soon_lbl.setStyleSheet("color: #f9e2af; font-size: 12px;")
         coming_soon_lbl.setTextFormat(Qt.TextFormat.RichText)
         ms_l.addWidget(coming_soon_lbl)
 
@@ -1100,6 +1182,7 @@ class SettingsTab(QWidget):
 
         layout.addWidget(ms_grp)
 
+        # ── Extra JVM Arguments ───────────────────────────────────────────────
         jvm_grp = QGroupBox("Tham số JVM bổ sung")
         jvm_l = QVBoxLayout(jvm_grp)
         self.jvm_edit = QLineEdit()
@@ -1107,6 +1190,7 @@ class SettingsTab(QWidget):
         jvm_l.addWidget(self.jvm_edit)
         layout.addWidget(jvm_grp)
 
+        # ── Data Directory ────────────────────────────────────────────────────
         dir_grp = QGroupBox("Thư mục Dữ liệu")
         dir_l = QHBoxLayout(dir_grp)
         self.dir_edit = QLineEdit()
@@ -1119,6 +1203,7 @@ class SettingsTab(QWidget):
         dir_l.addWidget(open_dir_btn)
         layout.addWidget(dir_grp)
 
+        # ── Links & Resources ────────────────────────────────────────────────
         links_grp = QGroupBox("Links & Resources")
         links_l = QHBoxLayout(links_grp)
         yt_btn = QPushButton("▶️ YouTube Channel")
@@ -1140,6 +1225,7 @@ class SettingsTab(QWidget):
         links_l.addStretch()
         layout.addWidget(links_grp)
 
+        # ── Misc ─────────────────────────────────────────────────────────────
         misc_grp = QGroupBox("Khác")
         misc_l = QVBoxLayout(misc_grp)
         self.snap_cb = QCheckBox("Hiển thị bản snapshot trong danh sách phiên bản")
@@ -1223,7 +1309,7 @@ class SettingsTab(QWidget):
             "java_path": self.java_path_edit.text().strip(),
             "snapshots": self.snap_cb.isChecked(),
             "close_on_launch": self.close_launcher_cb.isChecked(),
-            "microsoft_client_id": "",  
+            "microsoft_client_id": "",  # Disabled until MS login is ready
         }
 
     def get(self) -> dict:
@@ -1234,7 +1320,7 @@ class SettingsTab(QWidget):
     def set_java_status(self, ok: bool, msg: str):
         self.java_label.setText(msg)
         self.java_label.setStyleSheet(
-            f"color: {'
+            f"color: {'#a6e3a1' if ok else '#f38ba8'};"
         )
 
     def _download_java_runtime(self, java_version: int):
@@ -1249,7 +1335,7 @@ class SettingsTab(QWidget):
         self.java_status.setText(
             f"☕ Đang cài đặt OpenJDK {java_version} qua Winget..."
         )
-        self.java_status.setStyleSheet("color: 
+        self.java_status.setStyleSheet("color: #cdd6f4;")
 
         self.btn_java8.setEnabled(False)
         self.btn_java17.setEnabled(False)
@@ -1281,13 +1367,15 @@ class SettingsTab(QWidget):
             self.java_status.setText(
                 "✅ Java đã được cài đặt thành công! Đường dẫn đã được lưu."
             )
-            self.java_status.setStyleSheet("color: 
+            self.java_status.setStyleSheet("color: #a6e3a1;")
             self.save()
         else:
             self.java_status.setText(
                 "❌ Cài đặt Java thất bại — UAC bị hủy hoặc Winget gặp lỗi. Kiểm tra Log tab để biết chi tiết."
             )
-            self.java_status.setStyleSheet("color: 
+            self.java_status.setStyleSheet("color: #f38ba8;")
+
+    # ── Microsoft Auth — preserved for future use, not connected to UI yet ────
 
     def _start_microsoft_login(self):
         if not self.mgr:
@@ -1323,7 +1411,7 @@ class SettingsTab(QWidget):
 
     def _on_login_failed(self, err_msg: str):
         self.account_label.setText("❌ Login failed")
-        self.login_btn.setEnabled(False)  
+        self.login_btn.setEnabled(False)  # Still disabled (Coming Soon)
         self.logout_btn.setEnabled(False)
         logger.error(f"Microsoft login failed: {err_msg}")
         QMessageBox.critical(self, "Login Error", f"Login failed:\n{err_msg}")
@@ -1334,7 +1422,7 @@ class SettingsTab(QWidget):
         name = acc.get("name", acc.get("username", "Unknown"))
         self.account_label.setText(f"✅ Logged in: {name}")
         self.login_btn.setEnabled(False)
-        self.logout_btn.setEnabled(False)  
+        self.logout_btn.setEnabled(False)  # Kept disabled (Coming Soon)
 
     def _logout_microsoft(self):
         self.config.pop("microsoft_account", None)
