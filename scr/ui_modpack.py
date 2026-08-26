@@ -27,9 +27,9 @@ from PyQt6.QtWidgets import (
 
 from core import Instance, MinecraftManager, INST_DIR
 
-_CF_API_KEY = "$2a$10$ikdeyDd1WBkPxFYhOxVAN.ZiJj6dPeAXte47fffCVxI6Ot6S3oEHm"
+_CF_API_KEY = "rick_roll"
 _MAX_CONCURRENT = 6
-_USER_AGENT = "PhantomXLauncher/1.1.1 (hoanglonggg79@gmail.com)"
+_USER_AGENT = "PhantomXLauncher/1.1.1 (email)"
 
 MR_HEADERS = {
     "User-Agent": _USER_AGENT,
