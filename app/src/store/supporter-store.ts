@@ -1,13 +1,3 @@
-/**
- * Supporter Badge Store (Sprint 3A++)
- *
- * Zustand store riêng biệt để quản lý toàn bộ state liên quan đến
- * Supporter Badge System. Tách khỏi app-store.ts để giữ code gọn gàng.
- *
- * Theme được persist qua document.documentElement.dataset.theme —
- * không cần rebuild Tailwind, CSS vars override tức thì.
- */
-
 import { create } from 'zustand'
 
 import { api, describeError } from '@/lib/api'
