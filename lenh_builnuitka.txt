@@ -1,0 +1,24 @@
+python -m nuitka `
+  --standalone `
+  --include-package=sidecar `
+  --include-package=scr `
+  --include-package=uvicorn `
+  --include-package=fastapi `
+  --include-package=starlette `
+  --include-package=anyio `
+  --include-package=pydantic `
+  --include-package=loguru `
+  --include-package=minecraft_launcher_lib `
+  --include-package=httpx `
+  --include-package=keyring `
+  --include-package=cryptography `
+  --include-package-data=certifi `
+  --include-package-data=minecraft_launcher_lib `
+  --windows-icon-from-ico=icon_sidecar.ico `
+  --windows-company-name="PhantomX Team" `
+  --windows-product-name="PhantomX Sidecar" `
+  --windows-file-description="PhantomX Core Backend Service" `
+  --windows-file-version=1.2.0.0 `
+  --windows-product-version=1.2.0.0 `
+  --output-dir=dist_sidecar `
+  sidecar/main.py

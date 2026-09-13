@@ -1,0 +1,1 @@
+pyinstaller --noconfirm --onedir --windowed --noconsole --icon "icon.ico" --noupx --add-data "theme/music.mp3;theme" --version-file "info.txt" "PhantomXLauncher.py"

@@ -1,0 +1,29 @@
+PhantomX Launcher - LEAK  Update 1.1
+
+PhantomX im hơi lặng tiếng không là vì tớ lười đấy nhé 👉👈
+Bản Update 1.1 khá lớn đang trong những bước hoàn thiện cuối cùng. 
+Cùng điểm qua xem có gì mới nào
+
+• Hệ thống Repair Instance hoàn toàn mới: 
+Game bị lỗi, cài đặt lỗi, nghịch ngợm ngứa tay xóa hay xóa hỏng file? 
+Chỉ 1 click là nó quét và tự khôi phục lại file gốc cực mượt, quay về thời kỳ trắng trẻo sạch sẽ như chưa từng có cuộc chia ly (và tất nhiên là KHÔNG mất Mod/Saves/Config của anh em đâu ).
+
+• Hỗ trợ cài Modpack "Kaitun" a -> á:
+Anh em chỉ cần tải file modpack (.zip, .mrpack) về rồi để mặc xác nó ở đó. 
+Sau đó vào Launcher chọn file Modpack phát là nó tự cài Minecraft, Loader chuẩn đét 100%.
+Chỉ việc ngồi chờ nó thôi, nhàn thế là cùng. Anh em nhàn nhưng tớ code chức năng đó nguyên ngày đấy 💀
+
+
+
+• Discord Rich Presence (DRP):
+Hiện trạng thái Đang chơi Minecraft, dùng PhantomX trên profile Discord.
+Tăng khả năng nhận diện gấp 3 lần luôn anh em 🤯
+
+• Update Checker tự động:
+Nhận thông báo khi có bản update mới, không lo xài bản cũ hỏng hóc hoặc bug lòi
+
+• Tối ưu Mod Loaders:
+Bổ sung support mượt mà cho 2 Loader mới là Quilt & NeoForge 
+Đồng thời fix triệt để lỗi Permission Error khi cài Forge!
+
+Sắp xong rồi ae oii~ Mình ngồi test thêm, căng mắt ra tìm bug và dịch tiếng Việt cho anh em dễ chơi nữa là xong roaii
