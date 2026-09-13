@@ -125,8 +125,8 @@ graph TD
 
 ### For Players:
 1. **Download** the latest release package from [GitHub Releases](https://github.com/hoanglonggg79/PhantomXLauncher/releases).
-2. **Extract** the `.zip` archive to any directory (fully portable, USB drives supported via `portable.txt`).
-3. **Launch** `PhantomX.exe` and enjoy!
+2. **Extract** the `.zip` archive to any directory.
+3. **Launch** `PhantomXLauncher.exe` and enjoy!
 
 ### For Developers:
 
