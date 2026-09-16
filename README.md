@@ -4,7 +4,7 @@
 
 ![PhantomX Logo](./icon.png)
 
-### **The Next-Generation Minecraft Launcher**
+### **The Next Gen Minecraft Launcher**
 *Engineered for extreme performance, Cyberpunk aesthetics, effortless modding, and seamless gameplay.*
 
 [![Version](https://img.shields.io/badge/version-1.2.0-emerald.svg?style=for-the-badge)](https://github.com/hoanglonggg79/PhantomXLauncher/releases)
