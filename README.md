@@ -4,7 +4,7 @@
 
 ![PhantomX Logo](./icon.png)
 
-### **The Next-Generation Minecraft Launcher**
+### **The Next Gen Minecraft Launcher**
 *Engineered for extreme performance, Cyberpunk aesthetics, effortless modding, and seamless gameplay.*
 
 [![Version](https://img.shields.io/badge/version-1.2.0-emerald.svg?style=for-the-badge)](https://github.com/hoanglonggg79/PhantomXLauncher/releases)
@@ -26,42 +26,6 @@
 ## Highlights of Version 1.2.0
 
 PhantomX 1.2.0 is a complete overhaul and ground-up architectural rewrite, transitioning from legacy PyQt to a modern **3-Tier Desktop Architecture**:
-
-```mermaid
-graph TD
-    subgraph UI ["Frontend (app/src - React + Vite + TS)"]
-        ReactApp["React UI (Tailwind CSS v4 + shadcn/ui)"]
-        ZustandStore["App Store (Zustand)"]
-        SSEClient["SSE Listener (/api/events)"]
-        HTTPClient["HTTP REST Client"]
-    end
-
-    subgraph RustBackend ["Desktop Shell (app/src-tauri)"]
-        TauriApp["Tauri 2 Core"]
-        Spawner["Sidecar Spawner (tokio timeout 15s)"]
-        StateStore["Tauri State (Port + Token + Child Process)"]
-    end
-
-    subgraph PythonSidecar ["Core Backend (sidecar/)"]
-        FastAPIApp["FastAPI Server (127.0.0.1:dyn_port)"]
-        TokenAuth["Token Middleware (X-PhantomX-Token)"]
-        EventBus["Thread-safe EventBus (asyncio.Queue)"]
-        CoreBridge["Core Bridge (scr/core.py - Qt decoupled)"]
-    end
-
-    ReactApp --> ZustandStore
-    ZustandStore --> HTTPClient
-    ZustandStore --> SSEClient
-    HTTPClient -->|REST Requests with Token| FastAPIApp
-    SSEClient -->|Realtime Stream logs/progress| EventBus
-    TauriApp -->|Spawn & Handshake| Spawner
-    Spawner -->|PHANTOMX_READY:port:token| StateStore
-    TauriApp -->|invoke get_sidecar_info| ReactApp
-    FastAPIApp --> TokenAuth
-    TokenAuth --> CoreBridge
-    CoreBridge -->|Minecraft Launcher Lib / APIs| GameProcess["Minecraft Game Client"]
-
-```
 
 ---
 
@@ -125,8 +89,8 @@ graph TD
 
 ### For Players:
 1. **Download** the latest release package from [GitHub Releases](https://github.com/hoanglonggg79/PhantomXLauncher/releases).
-2. **Extract** the `.zip` archive to any directory (fully portable, USB drives supported via `portable.txt`).
-3. **Launch** `PhantomX.exe` and enjoy!
+2. **Extract** the `.zip` archive to any directory.
+3. **Launch** `PhantomXLauncher.exe` and enjoy!
 
 ### For Developers:
 
