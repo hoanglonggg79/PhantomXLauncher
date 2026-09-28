@@ -13,7 +13,6 @@ client_secret*.json
 worker.js
 wrangler.jsonc
 
-# Tài liệu nội bộ — không phát hành kèm repo.
 Update.md
 docs/
 
@@ -65,10 +64,7 @@ Thumbs.db
 desktop.ini
 .DS_Store
 
-# Muốn bỏ track một file git ĐANG quản lý thì phải dùng `git rm --cached <file>`
-# — chỉ thêm vào .gitignore là không đủ.
-
-# WorkBuddy agent workspace (verification harnesses, memory) — not part of the app
+# WorkBuddy agent workspace — not part of the app
 .workbuddy-ai/
 
 # Wrangler CLI cache (holds account metadata, never belongs in the repo)
