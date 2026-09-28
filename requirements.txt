@@ -17,3 +17,4 @@ cryptography>=42.0.0     # Ely.by token encryption + supporter signature verify
 platformdirs>=4.0.0
 psutil>=5.9.0            # Parent-process watchdog + auto RAM detection
 pypresence               # Discord Rich Presence
+python-multipart
