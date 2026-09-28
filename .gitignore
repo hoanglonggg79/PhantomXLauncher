@@ -8,6 +8,11 @@ credentials.json
 token.json
 client_secret*.json
 
+# Cloudflare Worker source — the admin token sits in plaintext here, so it must
+# never be committed. Use `wrangler secret put ADMIN_SECRET_TOKEN` for deployment.
+worker.js
+wrangler.jsonc
+
 __pycache__/
 *.py[cod]
 *$py.class
