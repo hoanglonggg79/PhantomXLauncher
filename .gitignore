@@ -13,6 +13,10 @@ client_secret*.json
 worker.js
 wrangler.jsonc
 
+# Tài liệu nội bộ — không phát hành kèm repo.
+Update.md
+docs/
+
 __pycache__/
 *.py[cod]
 *$py.class
@@ -61,9 +65,8 @@ Thumbs.db
 desktop.ini
 .DS_Store
 
-# Lưu ý: Update.md và docs/ KHÔNG nằm ở đây vì chúng đang được git track —
-# thêm vào .gitignore cũng vô tác dụng. Muốn bỏ track thì phải dùng
-# `git rm --cached <file>`.
+# Muốn bỏ track một file git ĐANG quản lý thì phải dùng `git rm --cached <file>`
+# — chỉ thêm vào .gitignore là không đủ.
 
 # WorkBuddy agent workspace (verification harnesses, memory) — not part of the app
 .workbuddy-ai/
