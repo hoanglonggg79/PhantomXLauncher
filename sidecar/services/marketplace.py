@@ -15,7 +15,7 @@ from sidecar.services.tasks import TaskContext
 from sidecar.utils.file_ops import safe_file_operation
 
 CURSEFORGE_WORKER_URL = "https://curseforge-proxy.hoanglonggg79.workers.dev"
-CURSEFORGE_CLIENT_TOKEN = "ptx_548e813da32dc70a8f03f5a5"
+CURSEFORGE_CLIENT_TOKEN = ""
 MODRINTH_API_URL = "https://api.modrinth.com/v2"
 
 USER_AGENT = "PhantomXLauncher/1.2.0 (hoanglonggg79/PhantomXLauncher)"
