@@ -82,7 +82,12 @@ export const useSupporterStore = create<SupporterState>((set, get) => ({
   verifyToken: async (token: string) => {
     set({ isLoading: true, verifyError: null })
     try {
-      const result = await api.verifySupporter(token)
+      const trimmed = token.trim()
+      const result =
+        trimmed.toUpperCase().startsWith('PX-') || trimmed.length < 64
+          ? await api.redeemSupporter(trimmed)
+          : await api.verifySupporter(trimmed)
+
       if (result.valid) {
         // Refresh status từ config.json sau khi persist thành công
         const status = await api.getSupporterStatus()
@@ -93,7 +98,7 @@ export const useSupporterStore = create<SupporterState>((set, get) => ({
       } else {
         set({
           isLoading: false,
-          verifyError: result.error ?? 'Token không hợp lệ',
+          verifyError: result.error ?? 'Mã Key không hợp lệ',
         })
         return false
       }

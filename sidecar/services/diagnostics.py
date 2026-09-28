@@ -29,7 +29,6 @@ def get_gpu_info() -> str:
     except Exception as e:
         logger.debug(f"PowerShell GPU detection failed: {e}")
 
-    # Fallback to WMIC
     try:
         cmd = ["wmic", "path", "win32_VideoController", "get", "name"]
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
@@ -161,7 +160,7 @@ def submit_bug_report(
     steps: str = "",
     include_specs: bool = False,
     include_log: bool = True,
-    website: str = "",  # Honeypot field (must be "")
+    website: str = "",
 ) -> Dict[str, Any]:
     """
     Sends bug report to the Cloudflare Worker proxy according to Spec 1 & Spec 2.

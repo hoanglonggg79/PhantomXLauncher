@@ -222,6 +222,187 @@ class Signals(QObject):
     game_exited = pyqtSignal(int)
     status_msg = pyqtSignal(str)
 
+# ── Download resilience for minecraft-launcher-lib ────────────────────────────
+#
+# Stock mcll downloads assets/libraries through `_helper.download_file`, which is
+# a bare `requests.get(stream=True)` with NO timeout and NO retry, fanned out by
+# `ThreadPoolExecutor(max_workers=None)` (i.e. min(32, cpu+4) parallel TLS
+# connections to resources.download.minecraft.net). One connection killed by an
+# antivirus TLS inspector, a corporate proxy, a flaky router or CDN throttling
+# raises SSLEOFError/ConnectionResetError, which propagates straight out of
+# `future.result()` and aborts the entire install with the useless message
+# "Failed to install Minecraft X". These constants + the patches below make that
+# failure survivable.
+MCL_DOWNLOAD_WORKERS = 8      # was up to 32 concurrent TLS connections
+MCL_DOWNLOAD_RETRIES = 4      # attempts per single file
+MCL_DOWNLOAD_TIMEOUT = 30     # seconds, per request (stock passes none at all)
+INSTALL_ATTEMPTS = 3          # whole-install retries in install_vanilla()
+
+_mcll_resilience_applied = False
+
+
+def _resilient_download_file(
+    url: str,
+    path: str,
+    callback: Optional[dict] = None,
+    sha1: Optional[str] = None,
+    lzma_compressed: bool = False,
+    session=None,
+    minecraft_directory=None,
+    overwrite: bool = False,
+) -> bool:
+    """
+    Drop-in replacement for `minecraft_launcher_lib._helper.download_file` that
+    adds an explicit timeout and per-file retry with backoff.
+
+    Behaviour mirrors the original otherwise: returns False when the file is
+    already valid, returns False on a non-200 response, raises on checksum
+    mismatch or when every attempt fails (so the caller can retry the phase).
+    """
+    import lzma
+    from minecraft_launcher_lib._helper import (
+        check_path_inside_minecraft_directory,
+        get_sha1_hash,
+        get_user_agent,
+    )
+    from minecraft_launcher_lib.exceptions import InvalidChecksum
+
+    callback = callback or {}
+    set_status = callback.get("setStatus") or (lambda *_: None)
+
+    if minecraft_directory is not None:
+        check_path_inside_minecraft_directory(minecraft_directory, path)
+
+    # Already present and valid → nothing to do (matches stock behaviour).
+    if os.path.isfile(path) and not overwrite:
+        if sha1 is None:
+            return False
+        try:
+            if get_sha1_hash(path) == sha1:
+                return False
+        except OSError:
+            pass
+
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+    except Exception:
+        pass
+
+    set_status("Download " + os.path.basename(path))
+
+    last_error: Optional[BaseException] = None
+
+    for attempt in range(1, MCL_DOWNLOAD_RETRIES + 1):
+        try:
+            getter = session.get if session is not None else requests.get
+            response = getter(
+                url,
+                stream=True,
+                headers={"user-agent": get_user_agent()},
+                timeout=MCL_DOWNLOAD_TIMEOUT,
+            )
+            try:
+                if response.status_code != 200:
+                    return False
+                with open(path, "wb") as fh:
+                    response.raw.decode_content = True
+                    if lzma_compressed:
+                        fh.write(lzma.decompress(response.content))
+                    else:
+                        shutil.copyfileobj(response.raw, fh)
+            finally:
+                try:
+                    response.close()
+                except Exception:
+                    pass
+
+            if sha1 is not None:
+                checksum = get_sha1_hash(path)
+                if checksum != sha1:
+                    raise InvalidChecksum(url, path, sha1, checksum)
+
+            return True
+
+        except InvalidChecksum as exc:
+            last_error = exc
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        except Exception as exc:
+            last_error = exc
+
+        if attempt < MCL_DOWNLOAD_RETRIES:
+            time.sleep(min(0.5 * (2 ** (attempt - 1)), 5.0))
+
+    logger.debug(
+        f"download_file gave up after {MCL_DOWNLOAD_RETRIES} attempts: {url} ({last_error})"
+    )
+    raise RuntimeError(
+        f"Download failed after {MCL_DOWNLOAD_RETRIES} attempts: {url} ({last_error})"
+    )
+
+
+def _apply_mcll_resilience() -> None:
+    """
+    Patch minecraft-launcher-lib so its installers inherit our timeout/retry and
+    a bounded worker count. Applied once, and never fatal: if the library layout
+    changes, we log a warning and fall back to stock behaviour.
+    """
+    global _mcll_resilience_applied
+    if _mcll_resilience_applied:
+        return
+
+    try:
+        import importlib
+
+        # 1. Replace the download primitive wherever it was imported.
+        try:
+            import minecraft_launcher_lib._helper as _helper_mod
+
+            _helper_mod.download_file = _resilient_download_file
+        except Exception as exc:
+            logger.debug(f"mcll _helper patch skipped: {exc}")
+
+        for sub in ("install", "runtime", "natives"):
+            try:
+                module = importlib.import_module(f"minecraft_launcher_lib.{sub}")
+            except Exception:
+                continue
+            if hasattr(module, "download_file"):
+                module.download_file = _resilient_download_file
+
+        # 2. Cap the fan-out of the two parallel phases. install_minecraft_version
+        #    does not expose max_workers, so we wrap the callees it resolves at
+        #    call time.
+        install_mod = importlib.import_module("minecraft_launcher_lib.install")
+
+        original_libraries = install_mod.install_libraries
+        original_assets = install_mod.install_assets
+
+        def _bounded_install_libraries(id, libraries, path, callback, max_workers=None):
+            return original_libraries(
+                id, libraries, path, callback, max_workers=MCL_DOWNLOAD_WORKERS
+            )
+
+        def _bounded_install_assets(data, path, callback, max_workers=None):
+            return original_assets(
+                data, path, callback, max_workers=MCL_DOWNLOAD_WORKERS
+            )
+
+        install_mod.install_libraries = _bounded_install_libraries
+        install_mod.install_assets = _bounded_install_assets
+
+        _mcll_resilience_applied = True
+        logger.info(
+            f"mcll download resilience applied "
+            f"(workers={MCL_DOWNLOAD_WORKERS}, retries={MCL_DOWNLOAD_RETRIES}, "
+            f"timeout={MCL_DOWNLOAD_TIMEOUT}s)"
+        )
+    except Exception as exc:
+        logger.warning(f"Could not apply mcll download resilience, using stock behaviour: {exc}")
+
+
 class MinecraftManager:
     FABRIC_META = "https://meta.fabricmc.net/v2/versions/loader/{mc_version}"
     FORGE_MAVEN = "https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json"
@@ -516,67 +697,99 @@ class MinecraftManager:
     def install_vanilla(
         self, version_id: str, game_dir: str, cb_progress=None, cb_log=None
     ) -> bool:
-        try:
-            if cb_log:
-                cb_log(f"📦 Đang cài đặt Minecraft {version_id}…")
+        """
+        Install (or repair) a vanilla version.
 
-            def _cb(current, maximum, label):
-                try:
-                    c = int(current or 0)
-                    t = int(maximum or 0)
-                    s = str(label or "Đang tải…")
-                    if cb_progress:
-                        cb_progress(c, t, s)
-                    if cb_log and s:
-                        cb_log(f"  {s}")
-                except Exception as inner:
-                    logger.debug(f"Progress callback error: {inner}")
+        mcll is idempotent — it skips every file whose SHA-1 already matches — so
+        a transient network failure can simply be retried, and the retry resumes
+        instead of starting over. Each attempt also benefits from the bounded
+        concurrency and per-file retry installed by `_apply_mcll_resilience()`.
+        """
+        _apply_mcll_resilience()
 
-            mcll.install.install_minecraft_version(
-                version_id,
-                game_dir,
-                callback={
-                    "setStatus": lambda s: _cb(0, 0, s),
-                    "setProgress": lambda c: None,
-                    "setMax": lambda m: None,
-                },
-            )
-            logger.info(f"Vanilla {version_id} đã được cài đặt vào {game_dir}")
-            return True
+        if cb_log:
+            cb_log(f"📦 Đang cài đặt Minecraft {version_id}…")
 
-        except TypeError:
+        def _cb(current, maximum, label):
             try:
-                if cb_log:
-                    cb_log("📦 Thử cài đặt lại với legacy callback…")
+                c = int(current or 0)
+                t = int(maximum or 0)
+                s = str(label or "Đang tải…")
+                if cb_progress:
+                    cb_progress(c, t, s)
+                if cb_log and s:
+                    cb_log(f"  {s}")
+            except Exception as inner:
+                logger.debug(f"Progress callback error: {inner}")
 
-                def _cb_legacy(data):
-                    if isinstance(data, dict):
-                        c = data.get("current", 0)
-                        t = data.get("total", data.get("max", 0))
-                        s = data.get("status", data.get("label", "Downloading…"))
-                    else:
-                        c, t, s = 0, 0, str(data)
-                    if cb_progress and t:
-                        cb_progress(int(c), int(t), str(s))
-                    if cb_log and s:
-                        cb_log(f"  {s}")
+        def _cb_legacy(data):
+            if isinstance(data, dict):
+                c = data.get("current", 0)
+                t = data.get("total", data.get("max", 0))
+                s = data.get("status", data.get("label", "Downloading…"))
+            else:
+                c, t, s = 0, 0, str(data)
+            if cb_progress and t:
+                cb_progress(int(c), int(t), str(s))
+            if cb_log and s:
+                cb_log(f"  {s}")
 
-                mcll.install.install_minecraft_version(
-                    version_id, game_dir, callback=_cb_legacy
-                )
-                logger.info(f"Vanilla {version_id} đã được cài đặt (legacy cb) vào {game_dir}")
+        last_error: Optional[BaseException] = None
+        use_legacy = False
+
+        for attempt in range(1, INSTALL_ATTEMPTS + 1):
+            try:
+                if use_legacy:
+                    mcll.install.install_minecraft_version(
+                        version_id, game_dir, callback=_cb_legacy
+                    )
+                else:
+                    mcll.install.install_minecraft_version(
+                        version_id,
+                        game_dir,
+                        callback={
+                            "setStatus": lambda s: _cb(0, 0, s),
+                            "setProgress": lambda c: None,
+                            "setMax": lambda m: None,
+                        },
+                    )
+                logger.info(f"Vanilla {version_id} đã được cài đặt vào {game_dir}")
                 return True
-            except Exception as e2:
-                logger.error(f"install_vanilla legacy fallback failed: {e2}")
-                if cb_log:
-                    cb_log(f"❌ Lỗi cài đặt: {e2}")
-                return False
 
-        except Exception as e:
-            logger.error(f"install_vanilla failed: {e}")
-            if cb_log:
-                cb_log(f"❌ Lỗi cài đặt: {e}")
-            return False
+            except TypeError as e:
+                # mcll changed its callback contract — fall back to the legacy
+                # dict once, without treating it as a transient network failure.
+                if not use_legacy:
+                    use_legacy = True
+                    logger.warning(
+                        f"mcll callback signature mismatch, retrying with legacy callback: {e}"
+                    )
+                    if cb_log:
+                        cb_log("📦 Thử cài đặt lại với legacy callback…")
+                    continue
+                last_error = e
+
+            except Exception as e:
+                last_error = e
+
+            logger.warning(
+                f"install_vanilla attempt {attempt}/{INSTALL_ATTEMPTS} failed: {last_error}"
+            )
+
+            if attempt < INSTALL_ATTEMPTS:
+                delay = min(2 ** (attempt - 1), 8)
+                if cb_log:
+                    cb_log(f"⚠️ Lỗi khi tải (lần {attempt}/{INSTALL_ATTEMPTS}): {last_error}")
+                    cb_log(f"🔄 Đang thử lại sau {delay}s…")
+                time.sleep(delay)
+
+        if last_error is None:
+            last_error = RuntimeError("Install did not complete")
+
+        logger.error(f"install_vanilla failed after {INSTALL_ATTEMPTS} attempts: {last_error}")
+        if cb_log:
+            cb_log(f"❌ Lỗi cài đặt: {last_error}")
+        return False
 
     def install_fabric(
         self,

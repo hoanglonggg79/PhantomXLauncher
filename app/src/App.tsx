@@ -6,6 +6,7 @@ import { TaskConsole } from '@/components/console/TaskConsole'
 import { ReportBugDialog } from '@/components/feedback/ReportBugDialog'
 import { CreateInstanceDialog } from '@/components/instances/CreateInstanceDialog'
 import { InstanceGrid } from '@/components/instances/InstanceGrid'
+import { RepairDialog } from '@/components/instances/RepairDialog'
 import { Header } from '@/components/layout/Header'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { MarketplaceView } from '@/components/marketplace/MarketplaceView'
@@ -62,6 +63,7 @@ export default function App() {
         </main>
 
         <ReportBugDialog />
+        <RepairDialog />
         <UpdateDialog />
         <NoticeToast />
       </div>

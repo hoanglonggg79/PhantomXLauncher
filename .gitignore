@@ -52,3 +52,10 @@ bump-version.py
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# WorkBuddy agent workspace (verification harnesses, memory) — not part of the app
+.workbuddy-ai/
+
+# Wrangler CLI cache (holds account metadata, never belongs in the repo)
+.wrangler/
+

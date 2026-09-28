@@ -1,0 +1,2 @@
+reset key database: DELETE FROM supporter_keys;
+view all key: SELECT * FROM supporter_keys;

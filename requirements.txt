@@ -1,13 +1,19 @@
-# PhantomX Minecraft Launcher — Dependencies
+# PhantomX Launcher — Python dependencies
 # Install with: pip install -r requirements.txt
+#
+# Runtime deps of the FastAPI sidecar. The legacy PyQt6 launcher
+# (scr/ui_*.py, scr/main_window.py, scr/PhantomXLauncher.py) has been removed,
+# so PyQt6 and aiohttp are no longer needed: the sidecar only reuses
+# scr/core.py, which guards its PyQt6 import with try/except and falls back to
+# stub classes when Qt is absent.
+# Do NOT re-add pyqt6 — it would bloat the Nuitka sidecar bundle (~100 MB) for
+# a purely cosmetic "Qt available" badge in the About panel.
 
-pyqt6>=6.4.0
 minecraft-launcher-lib>=6.0
 requests>=2.31.0
 loguru>=0.7.0
 keyring>=24.0.0
-cryptography>=42.0.0
+cryptography>=42.0.0     # Ely.by token encryption + supporter signature verify
 platformdirs>=4.0.0
-psutil>=5.9.0            # Optional — for auto RAM detection
-pypresence               # Discord Overlay
-aiohttp>=3.9.0           # Async downloads for Repair and Modpack tabs
+psutil>=5.9.0            # Parent-process watchdog + auto RAM detection
+pypresence               # Discord Rich Presence

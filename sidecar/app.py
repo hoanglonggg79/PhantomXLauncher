@@ -49,11 +49,43 @@ def extract_token(request: Request) -> str:
     return request.query_params.get("token", "")
 
 
+def _silence_windows_transport_noise(loop: asyncio.AbstractEventLoop) -> None:
+    """
+    Downgrade the spurious `ConnectionResetError` that Windows' ProactorEventLoop
+    logs from `_ProactorBasePipeTransport._call_connection_lost`.
+
+    uvicorn runs on the Proactor loop here. Whenever a client drops a socket
+    mid-flight — an EventSource tearing down after `complete`, an aborted fetch,
+    or the window closing — the transport's cleanup calls `_call_connection_lost`
+    on a socket that is already reset, and asyncio's default handler prints a
+    full ERROR traceback. The connection is gone either way, so this is pure log
+    noise, not a failure. Keep a real handler for everything else.
+    """
+    previous = loop.get_exception_handler()
+
+    def handler(active_loop: asyncio.AbstractEventLoop, context: dict) -> None:
+        if isinstance(context.get("exception"), ConnectionResetError):
+            logger.debug(
+                f"Suppressed transport reset (client closed the socket): "
+                f"{context.get('exception')}"
+            )
+            return
+
+        if previous is not None:
+            previous(active_loop, context)
+        else:
+            active_loop.default_exception_handler(context)
+
+    loop.set_exception_handler(handler)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Bind the EventBus to this loop so worker threads can emit before any
     # SSE client has subscribed.
-    get_event_bus().bind_loop(asyncio.get_running_loop())
+    loop = asyncio.get_running_loop()
+    get_event_bus().bind_loop(loop)
+    _silence_windows_transport_noise(loop)
     logger.info("Sidecar app ready")
     yield
     logger.info("Sidecar app shutting down")

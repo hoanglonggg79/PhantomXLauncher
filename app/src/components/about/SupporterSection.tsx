@@ -54,7 +54,7 @@ function IdleState({
           value={tokenInput}
           onChange={(e) => onTokenChange(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && onSubmit()}
-          placeholder="Dán Supporter Key vào đây..."
+          placeholder="Dán Supporter Key (VD: PX-A8K2-9M4P-X7N1)..."
           className="flex-1 font-mono text-xs"
         />
         <Button

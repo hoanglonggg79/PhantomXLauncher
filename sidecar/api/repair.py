@@ -5,6 +5,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
+from sidecar.api.instances import _fail
 from sidecar.services import repair
 from sidecar.services.instances import InstanceError
 from sidecar.services.tasks import start_task
@@ -24,8 +25,8 @@ def verify_integrity(name: str) -> Dict[str, Any]:
             name=f"verify-{name}",
         )
         return {"task_id": task_id, "instance": name}
-    except InstanceError as ie:
-        raise HTTPException(status_code=ie.status, detail=ie.message)
+    except InstanceError as e:
+        raise _fail(e) from e
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -40,8 +41,8 @@ def analyze_crash(name: str) -> Dict[str, Any]:
     """
     try:
         return repair.analyze_latest_crash(name)
-    except InstanceError as ie:
-        raise HTTPException(status_code=ie.status, detail=ie.message)
+    except InstanceError as e:
+        raise _fail(e) from e
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -56,8 +57,8 @@ def reset_options(name: str) -> Dict[str, Any]:
     """
     try:
         return repair.reset_options(name)
-    except InstanceError as ie:
-        raise HTTPException(status_code=ie.status, detail=ie.message)
+    except InstanceError as e:
+        raise _fail(e) from e
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

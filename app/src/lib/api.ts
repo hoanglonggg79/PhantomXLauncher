@@ -87,8 +87,13 @@ export function getSession(): SidecarInfo {
 export function describeError(error: unknown): string {
   if (error instanceof AxiosError) {
     const detail = error.response?.data?.detail
-    if (typeof detail === 'object' && detail !== null && 'message' in detail) {
-      return String((detail as { message: string }).message)
+    if (typeof detail === 'object' && detail !== null) {
+      if ('error' in detail && typeof (detail as { error: unknown }).error === 'string') {
+        return (detail as { error: string }).error
+      }
+      if ('message' in detail && typeof (detail as { message: unknown }).message === 'string') {
+        return (detail as { message: string }).message
+      }
     }
     if (typeof detail === 'string') return detail
     if (error.code === 'ECONNABORTED') return 'Request timed out'
@@ -430,6 +435,14 @@ export const api = {
     const { data } = await getApiClient().post<SupporterVerifyResponse>(
       '/api/supporter/verify',
       { token }
+    )
+    return data
+  },
+
+  async redeemSupporter(key: string): Promise<SupporterVerifyResponse> {
+    const { data } = await getApiClient().post<SupporterVerifyResponse>(
+      '/api/supporter/redeem',
+      { key }
     )
     return data
   },

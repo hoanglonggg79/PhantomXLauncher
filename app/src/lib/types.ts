@@ -423,6 +423,9 @@ export interface SupporterVerifyResponse {
   badge?: 'supporter'
   discord_id?: string
   error?: string
+  key_code?: string
+  revoked?: boolean
+  hwid_mismatch?: boolean
 }
 
 export interface SupporterStatus {
@@ -431,6 +434,10 @@ export interface SupporterStatus {
   discord_id?: string
   redeemed_at?: string
   theme?: 'default' | 'cyberpunk' | 'synthwave'
+  key_code?: string
+  revoked?: boolean
+  reason?: string
+  hwid_mismatch?: boolean
 }
 
 // ── Modpack Installation (Sprint 3B) ─────────────────────────────────────────
