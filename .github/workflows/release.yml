@@ -1,0 +1,233 @@
+name: Build & Release
+
+#   1. Push một tag dạng v1.2.1  -> build + tạo GitHub Release
+#   2. Bấm tay trong tab Actions -> chỉ build, tải file .zip ở mục Artifacts
+
+on:
+  push:
+    tags:
+      - "v*"
+  # push:
+  #   branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Không cho hai lượt release chạy chồng lên nhau trên cùng một tag.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "22"
+
+jobs:
+  build-windows:
+    name: Build PhantomX (Windows)
+    runs-on: windows-latest
+    # Nuitka standalone + Tauri trên runner 2 core mất khá lâu; 90 phút là mức an toàn.
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            sidecar/requirements.txt
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Cache target/ của Cargo — đây là bước tiết kiệm thời gian lớn nhất cho Tauri.
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> target
+
+      # Nuitka tự tải MinGW/ccache ở lần chạy đầu; cache lại để các lượt sau nhanh hơn.
+      - name: Cache Nuitka
+        uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/Nuitka
+          key: nuitka-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('lenh_builnuitka.txt') }}
+
+      - name: Read app version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="$(sed -n 's/.*APP_VERSION *= *"\([^"]*\)".*/\1/p' scr/core.py | head -1)"
+          fi
+          # Tên tag do người tạo tag quyết định; chỉ giữ ký tự an toàn trước khi
+          # đưa vào tên file và tiêu đề release.
+          VERSION="$(printf '%s' "$VERSION" | tr -cd '0-9A-Za-z._-')"
+          if [ -z "$VERSION" ]; then
+            echo "::error::Không xác định được phiên bản (tag không hợp lệ và không đọc được APP_VERSION)."
+            exit 1
+          fi
+          # Nuitka bắt buộc --windows-file-version có đủ 4 phần (a.b.c.d).
+          VERSION4="$(printf '%s' "$VERSION" | awk -F. '{printf "%d.%d.%d.%d", $1+0, $2+0, $3+0, $4+0}')"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "version4=$VERSION4" >> "$GITHUB_OUTPUT"
+          echo "Building version: $VERSION (Nuitka: $VERSION4)"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r sidecar/requirements.txt
+          pip install nuitka ordered-set zstandard httpx
+
+
+      # --assume-yes-for-downloads vì runner không có ai bấm "Yes" giúp Nuitka.
+      - name: Build sidecar (Nuitka standalone)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m nuitka \
+            --standalone \
+            --assume-yes-for-downloads \
+            --include-package=sidecar \
+            --include-package=scr \
+            --include-package=uvicorn \
+            --include-package=fastapi \
+            --include-package=starlette \
+            --include-package=anyio \
+            --include-package=pydantic \
+            --include-package=loguru \
+            --include-package=minecraft_launcher_lib \
+            --include-package=httpx \
+            --include-package=keyring \
+            --include-package=cryptography \
+            --include-package-data=certifi \
+            --include-package-data=minecraft_launcher_lib \
+            --windows-icon-from-ico=icon_sidecar.ico \
+            --windows-company-name="PhantomX Team" \
+            --windows-product-name="PhantomX Sidecar" \
+            --windows-file-description="PhantomX Core Backend Service" \
+            --windows-file-version="${{ steps.version.outputs.version4 }}" \
+            --windows-product-version="${{ steps.version.outputs.version4 }}" \
+            --output-dir=dist_sidecar \
+            sidecar/main.py
+
+          test -f dist_sidecar/main.dist/main.exe
+
+      - name: Build desktop shell (Tauri)
+        working-directory: app
+        run: |
+          npm ci
+          npm run tauri build -- --no-bundle
+
+      # Layout bản portable mà app/src-tauri/src/sidecar.rs mong đợi:
+      #   PhantomX.exe
+      #   binaries/sidecar/main.exe  (+ toàn bộ file runtime của Nuitka)
+      - name: Assemble portable layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p staging/binaries/sidecar
+
+          # Tauri 2 đặt tên file .exe thô theo tên package trong Cargo.toml ("app").
+          EXE=""
+          for candidate in \
+            app/src-tauri/target/release/PhantomX.exe \
+            app/src-tauri/target/release/app.exe
+          do
+            if [ -f "$candidate" ]; then EXE="$candidate"; break; fi
+          done
+          if [ -z "$EXE" ]; then
+            echo "::error::Không tìm thấy file .exe của Tauri. Nội dung target/release:"
+            ls -la app/src-tauri/target/release/ || true
+            exit 1
+          fi
+          echo "Dùng Tauri binary: $EXE"
+          cp "$EXE" staging/PhantomX.exe
+
+          test -f dist_sidecar/main.dist/main.exe
+          cp -r dist_sidecar/main.dist/. staging/binaries/sidecar/
+
+          echo "--- Nội dung gói portable ---"
+          find staging -maxdepth 2 | head -40
+
+      - name: Create ZIP
+        shell: pwsh
+        run: |
+          $zipName = "PhantomX-${{ steps.version.outputs.version }}-win64.zip"
+          $zipPath = Join-Path (Get-Location) $zipName
+          # 7-Zip nhanh hơn hẳn Compress-Archive với gói Nuitka (~2000 file).
+          # Runner GitHub có sẵn 7-Zip; nếu không có thì rơi về Compress-Archive.
+          $sevenZip = "C:\Program Files\7-Zip\7z.exe"
+          if (Test-Path $sevenZip) {
+            Push-Location staging
+            & $sevenZip a -tzip -mx=7 $zipPath * | Out-Null
+            if ($LASTEXITCODE -ne 0) { Pop-Location; throw "7z thất bại (exit $LASTEXITCODE)" }
+            Pop-Location
+          } else {
+            Compress-Archive -Path staging/* -DestinationPath $zipName -Force
+          }
+          Write-Host "Đã tạo $zipName ($([math]::Round((Get-Item $zipPath).Length / 1MB, 1)) MB)"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhantomX-${{ steps.version.outputs.version }}-win64
+          path: PhantomX-*-win64.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ZIP="PhantomX-${{ steps.version.outputs.version }}-win64.zip"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME đã tồn tại -> chỉ upload/ghi đè asset."
+            gh release upload "$GITHUB_REF_NAME" "$ZIP" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "$ZIP" \
+              --title "PhantomX ${{ steps.version.outputs.version }}" \
+              --generate-notes
+          fi
+
+      - name: Sync version.txt on main
+        if: github.ref_type == 'tag'
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          REPO="${{ github.repository }}"
+          SHA="$(gh api "repos/$REPO/contents/version.txt?ref=main" --jq .sha 2>/dev/null || true)"
+          CONTENT="$(printf '%s' "$VERSION" | base64 -w0)"
+          if [ -n "$SHA" ]; then
+            gh api "repos/$REPO/contents/version.txt" -X PUT \
+              -f message="chore: version.txt -> $VERSION" \
+              -f content="$CONTENT" -f sha="$SHA" -f branch=main
+          else
+            gh api "repos/$REPO/contents/version.txt" -X PUT \
+              -f message="chore: thêm version.txt ($VERSION)" \
+              -f content="$CONTENT" -f branch=main
+          fi
+          echo "Đã cập nhật version.txt = $VERSION"
