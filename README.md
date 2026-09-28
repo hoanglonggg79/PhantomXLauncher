@@ -90,7 +90,9 @@ PhantomX 1.2.0 is a complete overhaul and ground-up architectural rewrite, trans
 ### For Players:
 1. **Download** the latest release package from [GitHub Releases](https://github.com/hoanglonggg79/PhantomXLauncher/releases).
 2. **Extract** the `.zip` archive to any directory.
-3. **Launch** `PhantomXLauncher.exe` and enjoy!
+3. **Launch** `PhantomX.exe` and enjoy!
+
+> The `.zip` is a fully portable build — the Python backend ships inside it under `binaries/sidecar/`, so no separate Python installation is required.
 
 ### For Developers:
 
@@ -104,14 +106,14 @@ cd PhantomXLauncher
 ```bash
 python -m venv .venv
 .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements.txt -r sidecar/requirements.txt
 ```
+> Both files are required. `requirements.txt` covers the launcher core, while `sidecar/requirements.txt` adds the FastAPI / uvicorn / SSE stack the backend runs on.
 
-#### 3. Setup & Build Frontend
+#### 3. Setup Frontend
 ```bash
 cd app
-npm install
-npm run dev
+npm ci
 ```
 
 #### 4. Run with Tauri Desktop Shell
@@ -119,6 +121,13 @@ npm run dev
 # In the app/ directory
 npm run tauri dev
 ```
+> The Rust shell auto-spawns the backend from the repo (see `app/src-tauri/src/sidecar.rs`), so the virtualenv from step 2 must be active.
+
+#### 5. Bump the App Version
+```bash
+python bump-version.py 1.2.1
+```
+> Writes the new version into every file that declares one — `scr/core.py` (`APP_VERSION`), `app/package.json`, `app/package-lock.json`, `app/src-tauri/Cargo.toml`, `app/src-tauri/tauri.conf.json`, `version.txt`, and the sidecar services. GitHub Actions runs this same script automatically on a `v*` tag, which keeps `APP_VERSION` in sync with `version.txt` so the in-app update checker behaves correctly.
 
 ---
 

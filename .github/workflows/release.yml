@@ -1,6 +1,9 @@
 name: Build & Release
 
 #   1. Push một tag dạng v1.2.1  -> build + tạo GitHub Release
+#      Số phiên bản trong tag được ghi vào TOÀN BỘ file khai báo version
+#      (scr/core.py, package.json, Cargo.toml, tauri.conf.json, version.txt...)
+#      bằng bump-version.py — xem step "Sync app version from tag".
 #   2. Bấm tay trong tab Actions -> chỉ build, tải file .zip ở mục Artifacts
 
 on:
@@ -33,6 +36,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Cần lịch sử đầy đủ để `gh release create --generate-notes` và mọi
+          # bước so sánh tag hoạt động chính xác.
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -89,11 +96,37 @@ jobs:
           echo "version4=$VERSION4" >> "$GITHUB_OUTPUT"
           echo "Building version: $VERSION (Nuitka: $VERSION4)"
 
+      # Ghi số phiên bản của tag vào mọi file khai báo version TRƯỚC khi build.
+      # Thiếu bước này, bản build vẫn tự khai APP_VERSION cũ trong khi version.txt
+      # trên main đã là version của tag, khiến update checker báo "có bản cập nhật"
+      # mãi không dứt (kể cả sau khi người dùng đã tải bản mới).
+      - name: Sync app version from tag
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: python bump-version.py "${{ steps.version.outputs.version }}"
+
+      # Chốt chặn: build sẽ dừng ngay nếu version chưa thực sự đồng bộ.
+      - name: Verify version sync
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPECTED="${{ steps.version.outputs.version }}"
+          CORE="$(sed -n 's/.*APP_VERSION *= *"\([^"]*\)".*/\1/p' scr/core.py | head -1)"
+          TXT="$(tr -d '\r\n' < version.txt)"
+          if [ "$CORE" != "$EXPECTED" ] || [ "$TXT" != "$EXPECTED" ]; then
+            echo "::error::Lệch version — scr/core.py='$CORE', version.txt='$TXT', mong đợi='$EXPECTED'"
+            exit 1
+          fi
+          echo "Version đồng bộ OK: $EXPECTED"
+
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r sidecar/requirements.txt
-          pip install nuitka ordered-set zstandard httpx
+          # httpx KHÔNG được cài ở đây: không module nào trong sidecar/ hay scr/
+          # import nó, thêm vào chỉ tốn thời gian build và phình gói.
+          pip install nuitka ordered-set zstandard
 
 
       # --assume-yes-for-downloads vì runner không có ai bấm "Yes" giúp Nuitka.
@@ -113,9 +146,11 @@ jobs:
             --include-package=pydantic \
             --include-package=loguru \
             --include-package=minecraft_launcher_lib \
-            --include-package=httpx \
             --include-package=keyring \
             --include-package=cryptography \
+            --include-package=platformdirs \
+            --include-package=pypresence \
+            --include-package=sse_starlette \
             --include-package-data=certifi \
             --include-package-data=minecraft_launcher_lib \
             --windows-icon-from-ico=icon_sidecar.ico \
@@ -219,7 +254,20 @@ jobs:
           set -euo pipefail
           VERSION="${{ steps.version.outputs.version }}"
           REPO="${{ github.repository }}"
+
           SHA="$(gh api "repos/$REPO/contents/version.txt?ref=main" --jq .sha 2>/dev/null || true)"
+
+          # Nếu main đã đúng version này (trường hợp tag nằm trên main) thì bỏ qua,
+          # tránh sinh ra commit rỗng mỗi lần release.
+          if [ -n "$SHA" ]; then
+            REMOTE="$(gh api "repos/$REPO/contents/version.txt?ref=main" --jq .content 2>/dev/null \
+              | tr -d '\n\r' | base64 -d 2>/dev/null | tr -d '\r\n' || true)"
+            if [ "$REMOTE" = "$VERSION" ]; then
+              echo "version.txt trên main đã là $VERSION — bỏ qua."
+              exit 0
+            fi
+          fi
+
           CONTENT="$(printf '%s' "$VERSION" | base64 -w0)"
           if [ -n "$SHA" ]; then
             gh api "repos/$REPO/contents/version.txt" -X PUT \

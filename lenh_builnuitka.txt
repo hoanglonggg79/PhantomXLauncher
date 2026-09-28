@@ -1,5 +1,11 @@
+# Lệnh build sidecar chạy tại máy (PowerShell) — bản mirror của step
+# "Build sidecar (Nuitka standalone)" trong .github/workflows/release.yml.
+# LƯU Ý: số version bên dưới chỉ áp dụng cho build tay; trên CI, release.yml
+# ghi đè bằng version của tag. File này còn là key cache Nuitka của workflow,
+# nên sửa nội dung sẽ làm lượt build kế tiếp chạy nguội (chậm hơn).
 python -m nuitka `
   --standalone `
+  --assume-yes-for-downloads `
   --include-package=sidecar `
   --include-package=scr `
   --include-package=uvicorn `
@@ -9,9 +15,11 @@ python -m nuitka `
   --include-package=pydantic `
   --include-package=loguru `
   --include-package=minecraft_launcher_lib `
-  --include-package=httpx `
   --include-package=keyring `
   --include-package=cryptography `
+  --include-package=platformdirs `
+  --include-package=pypresence `
+  --include-package=sse_starlette `
   --include-package-data=certifi `
   --include-package-data=minecraft_launcher_lib `
   --windows-icon-from-ico=icon_sidecar.ico `

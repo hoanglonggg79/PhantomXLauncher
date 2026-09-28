@@ -41,13 +41,16 @@ dist_sidecar/
 *.onefile-build/
 build/
 
+# Output của các bước build khi chạy tay theo .github/workflows/release.yml
+staging/
+PhantomX-*-win64.zip
+
 *.log
 logs/
 sidecar/logs/
 PhantomXData/
 PTX_Bot/
 portable.txt
-bump-version.py
 
 .vs/
 .idea/
@@ -57,6 +60,10 @@ bump-version.py
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# Lưu ý: Update.md và docs/ KHÔNG nằm ở đây vì chúng đang được git track —
+# thêm vào .gitignore cũng vô tác dụng. Muốn bỏ track thì phải dùng
+# `git rm --cached <file>`.
 
 # WorkBuddy agent workspace (verification harnesses, memory) — not part of the app
 .workbuddy-ai/
