@@ -32,6 +32,19 @@ MODRINTH_HEADERS = {
     "Accept": "application/json",
 }
 
+# A dead proxy Worker 403s on every keystroke-driven search; log the first
+# occurrence at ERROR and then stay quiet so the sidecar log stays readable.
+_reported_curseforge_failures: set = set()
+
+
+def _log_curseforge_failure(message: str) -> None:
+    key = message.split("(status=")[-1]
+    if key in _reported_curseforge_failures:
+        logger.debug(message)
+        return
+    _reported_curseforge_failures.add(key)
+    logger.error(message)
+
 # ModLoader mapping for CurseForge (gameId = 432)
 # 0 = Any, 1 = Forge, 4 = Fabric, 5 = Quilt, 6 = NeoForge
 CF_LOADER_MAP = {
@@ -126,6 +139,7 @@ def search_modrinth(
         "total": data.get("total_hits", len(hits)),
         "offset": offset,
         "limit": page_size,
+        "available": True,
     }
 
 
@@ -293,8 +307,26 @@ def search_curseforge(
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
-        logger.error(f"CurseForge search failed: {e}")
-        return {"source": "curseforge", "hits": [], "total": 0, "error": str(e)}
+        # 403 here almost always means the Worker rejected our client token or
+        # its own CurseForge API key is dead. It is NOT a client-side problem,
+        # so say that instead of returning an empty grid with no explanation.
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        message = (
+            "Máy chủ CurseForge đang từ chối yêu cầu (HTTP 403). "
+            "Đây là lỗi phía máy chủ proxy, vui lòng thử lại sau hoặc dùng Modrinth."
+            if status == 403
+            else f"Không thể tìm kiếm trên CurseForge: {e}"
+        )
+        _log_curseforge_failure(f"CurseForge search failed (status={status}): {e}")
+        return {
+            "source": "curseforge",
+            "hits": [],
+            "total": 0,
+            "available": False,
+            "status": status,
+            "error": str(e),
+            "message": message,
+        }
 
     mod_list = data.get("data", [])
     pagination = data.get("pagination", {})
@@ -336,6 +368,7 @@ def search_curseforge(
         "total": total_count,
         "offset": offset,
         "limit": page_size,
+        "available": True,
     }
 
 

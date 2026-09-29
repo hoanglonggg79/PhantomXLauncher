@@ -50,6 +50,38 @@ except ImportError:
     )
 
 
+def check_java(java_path: str = "") -> dict:
+    """
+    Java status as a dict, for /api/system/diagnostics.
+
+    `MinecraftManager.check_java()` returns a (bool, str) tuple meant for the UI
+    badge; diagnostics needs the resolved path and major version too. Kept here
+    so the diagnostics module can call `core.check_java()` without building its
+    own manager (and without tripping over core.py's logger setup).
+    """
+    try:
+        # Reuse the shared manager: constructing a fresh MinecraftManager() would
+        # create BASE_DIR/default as a side effect of a read-only diagnostics call.
+        try:
+            from sidecar.services.core_service import get_manager
+
+            manager = get_manager()
+        except Exception:
+            manager = MinecraftManager()
+
+        ok, message = manager.check_java(java_path)
+        path = manager.find_java() if not java_path else java_path
+        major = manager.java_version(path) if path and Path(path).is_file() else None
+        return {
+            "ok": bool(ok),
+            "message": message,
+            "path": path or "",
+            "major": major,
+        }
+    except Exception as exc:  # diagnostics must never fail the whole report
+        return {"ok": False, "message": str(exc), "path": "", "major": None}
+
+
 if "_CF_API_KEY" in os.environ and "CF_API_KEY" not in os.environ:
     os.environ["CF_API_KEY"] = os.environ["_CF_API_KEY"]
 
@@ -68,6 +100,7 @@ configure_logging()
 __all__ = [
     "MinecraftManager",
     "Instance",
+    "check_java",
     "DiscordPresence",
     "APP_NAME",
     "APP_VERSION",

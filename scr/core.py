@@ -236,9 +236,195 @@ class Signals(QObject):
 MCL_DOWNLOAD_WORKERS = 8      # was up to 32 concurrent TLS connections
 MCL_DOWNLOAD_RETRIES = 4      # attempts per single file
 MCL_DOWNLOAD_TIMEOUT = 30     # seconds, per request (stock passes none at all)
+MCL_CONNECT_TIMEOUT = 10      # seconds to establish the TCP/TLS connection
 INSTALL_ATTEMPTS = 3          # whole-install retries in install_vanilla()
 
+# ── Mojang version manifest sources ──────────────────────────────────────────
+#
+# mcll hard-codes the legacy `launchermeta.mojang.com` host. Mojang migrated it
+# to `piston-meta.mojang.com`, and a number of ISPs / antivirus products block
+# the legacy host outright. Worse, the manifest request is issued *inline* by
+# `mcll.install.install_minecraft_version()` as a bare `requests.get()` with no
+# timeout, so it is NOT covered by the `download_file` patches below: on a
+# blocked network it hangs for the OS TCP timeout (~21s on Windows) on every one
+# of the INSTALL_ATTEMPTS retries and then surfaces an opaque
+# "Failed to install Minecraft X".
+#
+# Two mitigations, in order of strength:
+#   1. `ensure_version_json()` pre-seeds <game_dir>/versions/<v>/<v>.json, which
+#      makes mcll skip the manifest request entirely (`install_minecraft_version`
+#      short-circuits to `do_version_install` when that file exists).
+#   2. Every remaining manifest URL is rewritten onto the source chain below, so
+#      a blocked host falls through to a mirror instead of hanging.
+MOJANG_MANIFEST_SOURCES = [
+    "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json",
+    "https://bmclapi2.bangbang93.com/mc/game/version_manifest_v2.json",
+    "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json",
+]
+MANIFEST_PATH_SUFFIX = "/mc/game/version_manifest_v2.json"
+LEGACY_MANIFEST_HOST = "launchermeta.mojang.com"
+CURRENT_MANIFEST_HOST = "piston-meta.mojang.com"
+MANIFEST_ATTEMPTS = 2         # per source — keep total worst case bounded
+
+# Optional CDN override for networks that cannot reach Mojang's asset/library
+# hosts. Set PHANTOMX_ASSET_MIRROR=https://bmclapi2.bangbang93.com to serve
+# assets from <mirror>/assets/<hash> and libraries from <mirror>/maven/<path>.
+ASSET_MIRROR = os.environ.get("PHANTOMX_ASSET_MIRROR", "").strip().rstrip("/")
+
+MOJANG_UNREACHABLE_HINT = (
+    "Không thể kết nối tới máy chủ của Mojang. Kiểm tra kết nối mạng, "
+    "proxy/VPN hoặc phần mềm diệt virus đang chặn truy cập."
+)
+
 _mcll_resilience_applied = False
+
+
+def _is_manifest_url(url: str) -> bool:
+    return str(url).split("?")[0].endswith(MANIFEST_PATH_SUFFIX)
+
+
+def _manifest_source_chain(url: str) -> list:
+    """Rewrite a manifest URL onto the preferred-source chain, legacy host last."""
+    if not _is_manifest_url(url):
+        if LEGACY_MANIFEST_HOST in url:
+            return [url.replace(LEGACY_MANIFEST_HOST, CURRENT_MANIFEST_HOST), url]
+        return [url]
+    ordered = list(MOJANG_MANIFEST_SOURCES)
+    if url in ordered:
+        ordered.remove(url)
+        # mcll always asks for the legacy host; do not let that put it first.
+        if LEGACY_MANIFEST_HOST not in url:
+            ordered.insert(0, url)
+    return ordered
+
+
+def _get_with_source_chain(url: str, attempts: int = MANIFEST_ATTEMPTS):
+    """
+    GET `url`, falling through the alternative sources when it cannot be reached.
+
+    Always passes an explicit connect/read timeout — the whole point being that
+    mcll's own manifest request does not, and would otherwise hang for the OS
+    TCP timeout on every retry.
+    """
+    last_error: Optional[BaseException] = None
+    for source in _manifest_source_chain(url):
+        for attempt in range(1, attempts + 1):
+            try:
+                response = requests.get(
+                    source,
+                    headers={"user-agent": "PhantomX-Sidecar/1.0"},
+                    timeout=(MCL_CONNECT_TIMEOUT, MCL_DOWNLOAD_TIMEOUT),
+                )
+                if response.status_code == 200:
+                    if source != url:
+                        logger.info(f"Manifest served by fallback source: {source}")
+                    return response
+                last_error = RuntimeError(f"HTTP {response.status_code} from {source}")
+            except Exception as exc:
+                last_error = exc
+            if attempt < attempts:
+                time.sleep(min(0.5 * (2 ** (attempt - 1)), 3.0))
+        logger.debug(f"Manifest source failed: {source} ({last_error})")
+
+    raise requests.exceptions.ConnectionError(
+        f"Không thể tải {url} từ bất kỳ nguồn nào (lỗi cuối: {last_error})"
+    )
+
+
+def _fetch_manifest() -> Optional[dict]:
+    """Version manifest from the first reachable source, or None."""
+    try:
+        return _get_with_source_chain(MOJANG_MANIFEST_SOURCES[0]).json()
+    except Exception as exc:
+        logger.error(f"Mojang version manifest unavailable: {exc}")
+        return None
+
+
+def _apply_asset_mirror(data: dict) -> dict:
+    """Point every asset/library URL at ASSET_MIRROR, if one is configured."""
+    if not ASSET_MIRROR:
+        return data
+    try:
+        text = json.dumps(data)
+        for original, mirrored in (
+            ("https://resources.download.minecraft.net", f"{ASSET_MIRROR}/assets"),
+            ("https://libraries.minecraft.net", f"{ASSET_MIRROR}/maven"),
+        ):
+            text = text.replace(original, mirrored)
+        return json.loads(text)
+    except Exception as exc:
+        logger.warning(f"Could not rewrite URLs onto asset mirror: {exc}")
+        return data
+
+
+def ensure_version_json(version_id: str, game_dir: str, _depth: int = 0) -> Optional[Path]:
+    """
+    Make sure <game_dir>/versions/<version_id>/<version_id>.json exists.
+
+    This is the fix for "cannot install instance" on networks that block Mojang's
+    manifest host: `mcll.install.install_minecraft_version()` only hits the
+    network for the manifest when this file is missing, so seeding it here means
+    the install never depends on that request — and when it is missing we fetch
+    it through `_get_with_source_chain()` (timeout + mirror fallback) instead of
+    mcll's bare `requests.get()`.
+    """
+    target = Path(game_dir) / "versions" / version_id / f"{version_id}.json"
+
+    if target.is_file():
+        try:
+            json.loads(target.read_text(encoding="utf-8"))
+            return target
+        except Exception:
+            logger.warning(f"Version JSON unreadable, re-downloading: {target}")
+            try:
+                target.unlink()
+            except OSError:
+                pass
+
+    manifest = _fetch_manifest()
+    if manifest is None:
+        return None
+
+    entry = next(
+        (v for v in manifest.get("versions", []) if v.get("id") == version_id), None
+    )
+    if entry is None:
+        logger.error(f"Version '{version_id}' not present in the Mojang manifest")
+        return None
+
+    data = None
+    for candidate in (
+        entry.get("url"),
+        f"https://bmclapi2.bangbang93.com/version/{version_id}/json",
+    ):
+        if not candidate:
+            continue
+        try:
+            data = _get_with_source_chain(candidate).json()
+            break
+        except Exception as exc:
+            logger.debug(f"Version JSON source failed: {candidate} ({exc})")
+    if not isinstance(data, dict) or not data.get("id"):
+        logger.error(f"Could not download a valid version JSON for {version_id}")
+        return None
+
+    # A version that inherits from another (Forge-style) needs its parent on disk
+    # too, otherwise mcll recurses into — and dies on — the manifest request.
+    parent = data.get("inheritsFrom")
+    if parent and _depth < 4:
+        ensure_version_json(str(parent), game_dir, _depth + 1)
+
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps(_apply_asset_mirror(data), ensure_ascii=False), encoding="utf-8"
+        )
+    except OSError as exc:
+        logger.error(f"Could not write version JSON {target}: {exc}")
+        return None
+
+    logger.info(f"Version JSON ready: {target}")
+    return target
 
 
 def _resilient_download_file(
@@ -372,7 +558,41 @@ def _apply_mcll_resilience() -> None:
             if hasattr(module, "download_file"):
                 module.download_file = _resilient_download_file
 
-        # 2. Cap the fan-out of the two parallel phases. install_minecraft_version
+        # 2. Route every manifest / version-JSON request through the source chain
+        #    so it inherits a real timeout and the mirror fallbacks. `utils` and
+        #    `_helper` bind `get_requests_response_cache` by name at import time,
+        #    so both modules must be re-bound for the patch to take effect.
+        try:
+            import minecraft_launcher_lib._helper as _cache_helper_mod
+
+            def _resilient_requests_response_cache(url: str):
+                import datetime as _dt
+
+                cache = getattr(_cache_helper_mod, "_requests_response_cache", {})
+                now = _dt.datetime.now()
+                entry = cache.get(url)
+                if entry is not None and (now - entry["datetime"]).total_seconds() / 3600 < 1:
+                    return entry["response"]
+
+                response = _get_with_source_chain(url)
+                try:
+                    if response.status_code == 200:
+                        cache[url] = {"response": response, "datetime": now}
+                except Exception:
+                    pass
+                return response
+
+            _cache_helper_mod.get_requests_response_cache = _resilient_requests_response_cache
+
+            try:
+                _utils_mod = importlib.import_module("minecraft_launcher_lib.utils")
+                _utils_mod.get_requests_response_cache = _resilient_requests_response_cache
+            except Exception as exc:
+                logger.debug(f"mcll utils cache patch skipped: {exc}")
+        except Exception as exc:
+            logger.debug(f"mcll manifest cache patch skipped: {exc}")
+
+        # 3. Cap the fan-out of the two parallel phases. install_minecraft_version
         #    does not expose max_workers, so we wrap the callees it resolves at
         #    call time.
         install_mod = importlib.import_module("minecraft_launcher_lib.install")
@@ -590,22 +810,80 @@ class MinecraftManager:
         return unique
 
     def java_version(self, java_path: str) -> Optional[int]:
-        try:
-            r = subprocess.run(
-                [java_path, "-version"],
-                capture_output=True, text=True, timeout=5,
-                encoding="utf-8", errors="replace",
-            )
-            out = (r.stderr + r.stdout).lower()
-            import re
+        """
+        Major Java version of the given binary, or None when it cannot run.
+
+        On Windows, `CreateProcess` raises WinError 5 ("Access is denied") when
+        the path is a directory, a stale shortcut, or a binary blocked by an
+        antivirus / Controlled Folder Access rule. The old code swallowed that
+        as a generic warning, so the launcher reported "unknown version" and
+        then failed later inside the loader installers (which shell out to
+        `java -jar`). We now try the sibling binary (java.exe <-> javaw.exe),
+        fall back to `java` on PATH, and log *why* nothing worked.
+        """
+        import re
+
+        def _probe(exe: str) -> tuple[bool, Optional[int], Optional[str]]:
+            """(ran successfully, version, error description)."""
+            if not exe or not Path(exe).is_file():
+                return False, None, f"không phải tệp thực thi: {exe}"
+            try:
+                r = subprocess.run(
+                    [exe, "-version"],
+                    capture_output=True, text=True, timeout=5,
+                    encoding="utf-8", errors="replace",
+                )
+            except PermissionError as exc:
+                return False, None, f"từ chối quyền thực thi (WinError 5) — {exe}: {exc}"
+            except subprocess.TimeoutExpired:
+                return False, None, f"hết thời gian chờ khi chạy {exe}"
+            except OSError as exc:
+                return False, None, f"không thể chạy {exe}: {exc}"
+
+            out = ((r.stderr or "") + (r.stdout or "")).lower()
             for line in out.splitlines():
                 if "version" in line:
                     m = re.search(r'"(\d+)[\._]', line)
                     if m:
                         v = int(m.group(1))
-                        return 8 if v == 1 else v
-        except Exception as e:
-            logger.warning(f"java_version check failed: {e}")
+                        return True, (8 if v == 1 else v), None
+            return True, None, f"không đọc được số phiên bản từ {exe}"
+
+        variants: List[str] = []
+        if java_path:
+            variants.append(java_path)
+            low = java_path.lower()
+            if low.endswith("javaw.exe"):
+                variants.append(java_path[:-9] + "java.exe")
+            elif low.endswith("java.exe"):
+                variants.append(java_path[:-10] + "javaw.exe")
+
+        errors: List[str] = []
+        seen = set()
+        for exe in variants:
+            key = os.path.normcase(os.path.normpath(exe))
+            if key in seen:
+                continue
+            seen.add(key)
+            ran, version, err = _probe(exe)
+            if ran:
+                return version          # may be None — output parsed but empty
+            if err:
+                errors.append(err)
+
+        # Every explicit candidate was unusable: try whatever `java` is on PATH
+        # rather than reporting "no Java", which would abort the install.
+        path_java = shutil.which("java.exe" if platform.system() == "Windows" else "java")
+        if path_java and os.path.normcase(os.path.normpath(path_java)) not in seen:
+            ran, version, err = _probe(path_java)
+            if ran:
+                logger.info(f"java_version: dùng Java trên PATH ({path_java}) thay cho '{java_path}'")
+                return version
+            if err:
+                errors.append(err)
+
+        for err in errors:
+            logger.warning(f"java_version: {err}")
         return None
 
     def check_java(self, java_path: str = "") -> tuple[bool, str]:
@@ -649,28 +927,23 @@ class MinecraftManager:
         except Exception as e:
             logger.warning(f"mcll.utils.get_version_list failed: {e}. Attempting direct Mojang manifest fallback.")
 
-        try:
-            r = requests.get(
-                "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json",
-                headers={"User-Agent": "PhantomX-Sidecar/1.0"},
-                timeout=10,
-            )
-            if r.status_code == 200:
-                data = r.json()
-                fallback_versions = [
-                    {
-                        "id": item.get("id"),
-                        "type": item.get("type"),
-                        "releaseTime": item.get("releaseTime"),
-                        "complianceLevel": item.get("complianceLevel", 0),
-                    }
-                    for item in data.get("versions", [])
-                    if item.get("type") in keep_types
-                ]
-                logger.info(f"Loaded {len(fallback_versions)} versions via direct Mojang manifest fallback.")
-                return fallback_versions
-        except Exception as fallback_err:
-            logger.error(f"Mojang version manifest fallback also failed: {fallback_err}")
+        # Fallback used to re-request the *same* legacy `launchermeta` host that
+        # mcll just failed on, so it could never help. Go through the source
+        # chain instead (piston-meta first, then mirrors).
+        data = _fetch_manifest()
+        if data:
+            fallback_versions = [
+                {
+                    "id": item.get("id"),
+                    "type": item.get("type"),
+                    "releaseTime": item.get("releaseTime"),
+                    "complianceLevel": item.get("complianceLevel", 0),
+                }
+                for item in data.get("versions", [])
+                if item.get("type") in keep_types
+            ]
+            logger.info(f"Loaded {len(fallback_versions)} versions via manifest source chain.")
+            return fallback_versions
 
         return []
 
@@ -709,6 +982,17 @@ class MinecraftManager:
 
         if cb_log:
             cb_log(f"📦 Đang cài đặt Minecraft {version_id}…")
+
+        # Seed the version JSON ourselves. mcll only fetches the manifest when
+        # this file is missing, and its fetch is a bare requests.get() with no
+        # timeout against a single (often blocked) legacy host — which is what
+        # made installs hang ~21s per attempt and then fail. Failing fast here
+        # also avoids three pointless retries of a request we know cannot work.
+        if ensure_version_json(version_id, game_dir) is None:
+            logger.error(f"install_vanilla: cannot obtain version JSON for {version_id}")
+            if cb_log:
+                cb_log(f"❌ {MOJANG_UNREACHABLE_HINT}")
+            return False
 
         def _cb(current, maximum, label):
             try:
@@ -777,7 +1061,8 @@ class MinecraftManager:
             )
 
             if attempt < INSTALL_ATTEMPTS:
-                delay = min(2 ** (attempt - 1), 8)
+                # 1s/2s was far too short to outlive any real network hiccup.
+                delay = min(3 * attempt, 15)
                 if cb_log:
                     cb_log(f"⚠️ Lỗi khi tải (lần {attempt}/{INSTALL_ATTEMPTS}): {last_error}")
                     cb_log(f"🔄 Đang thử lại sau {delay}s…")
