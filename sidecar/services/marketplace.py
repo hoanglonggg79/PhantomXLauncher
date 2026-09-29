@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import re
 from typing import Any, Dict, List, Optional
@@ -15,7 +16,9 @@ from sidecar.services.tasks import TaskContext
 from sidecar.utils.file_ops import safe_file_operation
 
 CURSEFORGE_WORKER_URL = "https://curseforge-proxy.hoanglonggg79.workers.dev"
-CURSEFORGE_CLIENT_TOKEN = ""
+# Never commit this: supply it as PHANTOMX_CF_CLIENT_TOKEN. An empty token makes
+# the proxy answer 403, which is reported back as `available=False`.
+CURSEFORGE_CLIENT_TOKEN = os.environ.get("PHANTOMX_CF_CLIENT_TOKEN", "")
 MODRINTH_API_URL = "https://api.modrinth.com/v2"
 
 USER_AGENT = "PhantomXLauncher/1.2.0 (hoanglonggg79/PhantomXLauncher)"
@@ -26,6 +29,27 @@ CURSEFORGE_HEADERS = {
     "Content-Type": "application/json",
     "Accept": "application/json",
 }
+
+
+def curseforge_client_token() -> str:
+    """
+    Re-read the proxy token at call time.
+
+    Accepted names, in order: PHANTOMX_CF_CLIENT_TOKEN, then the CLIENT_SERECT_KEY
+    / _CLIENT_SERECT_KEY spelling already used in the local .env (sic).
+    """
+    for name in ("PHANTOMX_CF_CLIENT_TOKEN", "CLIENT_SERECT_KEY", "_CLIENT_SERECT_KEY"):
+        value = (os.environ.get(name) or "").strip()
+        if value:
+            return value
+    return CURSEFORGE_CLIENT_TOKEN
+
+
+def curseforge_headers() -> Dict[str, str]:
+    """Same headers, with the token re-read from the environment at call time."""
+    headers = dict(CURSEFORGE_HEADERS)
+    headers["X-PhantomX-Client-Token"] = curseforge_client_token()
+    return headers
 
 MODRINTH_HEADERS = {
     "User-Agent": USER_AGENT,
@@ -303,7 +327,7 @@ def search_curseforge(
     logger.info(f"CurseForge search via worker: {query} (ver: {mc_version}, loader: {loader_type}, offset: {offset})")
 
     try:
-        resp = requests.get(url, headers=CURSEFORGE_HEADERS, params=params, timeout=15)
+        resp = requests.get(url, headers=curseforge_headers(), params=params, timeout=15)
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
@@ -378,7 +402,7 @@ def get_curseforge_project(project_id: str) -> Dict[str, Any]:
     """
     url = f"{CURSEFORGE_WORKER_URL}/v1/mods/{urllib.parse.quote(str(project_id))}"
     try:
-        resp = requests.get(url, headers=CURSEFORGE_HEADERS, timeout=15)
+        resp = requests.get(url, headers=curseforge_headers(), timeout=15)
         resp.raise_for_status()
         data = resp.json().get("data", {})
     except Exception as e:
@@ -446,7 +470,7 @@ def get_curseforge_versions(
         params["modLoaderType"] = loader_type
 
     try:
-        resp = requests.get(url, headers=CURSEFORGE_HEADERS, params=params, timeout=15)
+        resp = requests.get(url, headers=curseforge_headers(), params=params, timeout=15)
         resp.raise_for_status()
         raw_files = resp.json().get("data", [])
     except Exception as e:
@@ -463,7 +487,7 @@ def get_curseforge_versions(
             try:
                 dl_res = requests.get(
                     f"{CURSEFORGE_WORKER_URL}/v1/mods/{project_id}/files/{file_id}/download-url",
-                    headers=CURSEFORGE_HEADERS,
+                    headers=curseforge_headers(),
                     timeout=10,
                 )
                 if dl_res.status_code == 200:
@@ -565,7 +589,7 @@ def install_mod_task(
 
     headers = {"User-Agent": USER_AGENT}
     if source == "curseforge":
-        headers["X-PhantomX-Client-Token"] = CURSEFORGE_CLIENT_TOKEN
+        headers["X-PhantomX-Client-Token"] = curseforge_client_token()
 
     resp = requests.get(download_url, headers=headers, stream=True, timeout=30)
     resp.raise_for_status()

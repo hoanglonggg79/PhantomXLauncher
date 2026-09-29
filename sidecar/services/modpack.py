@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -33,22 +34,49 @@ from sidecar.utils.file_ops import (
     safe_write_text,
 )
 
-CF_API_KEY = "$2a$10$ikdeyDd1WBkPxFYhOxVAN.ZiJj6dPeAXte47fffCVxI6Ot6S3oEHm"
+# Secrets are injected at runtime, never committed. The previous literals lived
+# in git history, so both keys must be treated as compromised and rotated.
+# Nuitka bundles read them from the environment; core_bridge also mirrors the
+# underscore-prefixed variants used by the packaging scripts.
+CF_API_KEY = os.environ.get("CF_API_KEY", "")
 CURSEFORGE_WORKER_URL = "https://curseforge-proxy.hoanglonggg79.workers.dev"
-CURSEFORGE_CLIENT_TOKEN = "ptx_548e813da32dc70a8f03f5a5"
+CURSEFORGE_CLIENT_TOKEN = os.environ.get("PHANTOMX_CF_CLIENT_TOKEN", "")
 USER_AGENT = "PhantomXLauncher/1.2.0 (hoanglonggg79/PhantomXLauncher)"
 
-CF_HEADERS = {
-    "Accept": "application/json",
-    "x-api-key": CF_API_KEY,
-    "User-Agent": USER_AGENT,
-}
 
-CF_PROXY_HEADERS = {
-    "X-PhantomX-Client-Token": CURSEFORGE_CLIENT_TOKEN,
-    "User-Agent": USER_AGENT,
-    "Accept": "application/json",
-}
+def _cf_api_key() -> str:
+    """
+    Resolved at call time, not import time.
+
+    `.env` is loaded and `core_bridge` mirrors `_CF_API_KEY` into `CF_API_KEY`
+    while the app boots, which can happen *after* this module is imported —
+    a module-level constant would have frozen an empty string by then.
+    """
+    return os.environ.get("CF_API_KEY") or os.environ.get("_CF_API_KEY", "")
+
+
+def _cf_client_token() -> str:
+    for name in ("PHANTOMX_CF_CLIENT_TOKEN", "CLIENT_SERECT_KEY", "_CLIENT_SERECT_KEY"):
+        value = (os.environ.get(name) or "").strip()
+        if value:
+            return value
+    return CURSEFORGE_CLIENT_TOKEN
+
+
+def cf_headers() -> Dict[str, str]:
+    return {
+        "Accept": "application/json",
+        "x-api-key": _cf_api_key(),
+        "User-Agent": USER_AGENT,
+    }
+
+
+def cf_proxy_headers() -> Dict[str, str]:
+    return {
+        "X-PhantomX-Client-Token": _cf_client_token(),
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json",
+    }
 
 MR_HEADERS = {
     "User-Agent": USER_AGENT,
@@ -220,7 +248,7 @@ def _resolve_and_download_cf_file(
     # 1. Try resolving file info via worker proxy
     try:
         url = f"{CURSEFORGE_WORKER_URL}/v1/mods/{project_id}/files/{file_id}"
-        resp = session.get(url, headers=CF_PROXY_HEADERS, timeout=12)
+        resp = session.get(url, headers=cf_proxy_headers(), timeout=12)
         if resp.status_code == 200:
             data = resp.json().get("data", {})
             file_name = data.get("fileName") or file_name
@@ -232,7 +260,7 @@ def _resolve_and_download_cf_file(
     if not dl_url:
         try:
             url = f"{CURSEFORGE_WORKER_URL}/v1/mods/{project_id}/files/{file_id}/download-url"
-            resp = session.get(url, headers=CF_PROXY_HEADERS, timeout=12)
+            resp = session.get(url, headers=cf_proxy_headers(), timeout=12)
             if resp.status_code == 200:
                 dl_url = resp.json().get("data") or ""
         except Exception as e:
@@ -242,7 +270,7 @@ def _resolve_and_download_cf_file(
     if not dl_url:
         try:
             url = f"https://api.curseforge.com/v1/mods/{project_id}/files/{file_id}"
-            resp = session.get(url, headers=CF_HEADERS, timeout=12)
+            resp = session.get(url, headers=cf_headers(), timeout=12)
             if resp.status_code == 200:
                 data = resp.json().get("data", {})
                 file_name = data.get("fileName") or file_name
@@ -254,7 +282,7 @@ def _resolve_and_download_cf_file(
     if not dl_url:
         try:
             url = f"https://api.curseforge.com/v1/mods/{project_id}/files/{file_id}/download-url"
-            resp = session.get(url, headers=CF_HEADERS, timeout=12)
+            resp = session.get(url, headers=cf_headers(), timeout=12)
             if resp.status_code == 200:
                 dl_url = resp.json().get("data") or ""
         except Exception as e:
