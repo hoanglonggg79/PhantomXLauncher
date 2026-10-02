@@ -1,4 +1,4 @@
-# PhantomX Minecraft Launcher (v1.2.0)
+# PhantomX Minecraft Launcher (v1.2.1)
 
 <div align="center">
 
@@ -7,7 +7,7 @@
 ### **The Next Gen Minecraft Launcher**
 *Engineered for extreme performance, Cyberpunk aesthetics, effortless modding, and seamless gameplay.*
 
-[![Version](https://img.shields.io/badge/version-1.2.0-emerald.svg?style=for-the-badge)](https://github.com/hoanglonggg79/PhantomXLauncher/releases)
+[![Version](https://img.shields.io/badge/version-1.2.1-emerald.svg?style=for-the-badge)](https://github.com/hoanglonggg79/PhantomXLauncher/releases)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-24C8D8?style=for-the-badge&logo=tauri&logoColor=white)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev/)
 [![FastAPI](https://img.shields.io/badge/Python-FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
@@ -25,7 +25,30 @@
 
 ## Highlights of Version 1.2.0
 
-PhantomX 1.2.0 is a complete overhaul and ground-up architectural rewrite, transitioning from legacy PyQt to a modern **3-Tier Desktop Architecture**:
+PhantomX 1.2.0 is a complete overhaul and ground-up architectural rewrite, transitioning from legacy PyQt to a modern **3-Tier Desktop Architecture**.
+
+---
+
+## What is new in Version 1.2.1
+
+A maintenance release driven by bug reports from players. It adds Java 25 support, so Minecraft's new year-based releases can actually start.
+
+**Java 25 / Minecraft 26.x**
+
+- Minecraft moved to year-based version numbers in 2026 (`26.1`, `26.2`, `26.3`, ...). Those releases are compiled for Java 25 (class file version 69.0) and refuse to run on Java 21 with `UnsupportedClassVersionError`.
+- The launcher now manages a JRE 25 like any other runtime: one-click download (Eclipse Temurin), `Microsoft.OpenJDK.25` via Winget, and Mojang `java-runtime-epsilon`.
+- Version mapping is now: `MC < 1.17` to Java 8, `1.17 - 1.20.4` to Java 17, `1.20.5 - 1.21.x` to Java 21, `MC >= 26.1` to Java 25. Both numbering schemes are understood, including snapshots such as `26.3-snapshot-10`, `26.3-pre-1`, `26.3-rc-2` and `26w14a`.
+- If the Java path saved in the settings is too old for the selected Minecraft version, the launcher silently switches to a runtime that can run it, and logs which one it picked instead of crashing at startup.
+
+**Bug fixes**
+
+- Fixed `cannot import name 'supporter' from 'sidecar.services'`, which silently disabled the Discord in-game presence (Playing Minecraft with instance name, loader and supporter flair).
+- Fixed `module 'sidecar.core_bridge' has no attribute 'check_java'`: the Java row in System Diagnostics and in bug reports now resolves the real path and version.
+- The crash-log analyzer maps the class file version from the log straight to the Java release to install, including 69 for Java 25.
+
+**Download reliability**
+
+- JRE downloads now use a source chain instead of a single URL: GitHub, then the Tsinghua and CERNET Adoptium mirrors (byte-identical artifacts), then the Microsoft OpenJDK build as a last resort. A short connect timeout makes a blocked host fail over in seconds instead of hanging, and the archive is streamed to disk rather than buffered in memory.
 
 ---
 
@@ -74,7 +97,7 @@ PhantomX 1.2.0 is a complete overhaul and ground-up architectural rewrite, trans
 
 ---
 
-## 🖥️ System Requirements
+## System Requirements
 
 | Component | Minimum | Recommended |
 | :--- | :--- | :--- |
@@ -152,7 +175,7 @@ Distributed under the **GNU General Public License v3.0 (GPLv3)**. See [`LICENSE
 
 <div align="center">
 
-Made with ❤ for the Vietnam Minecraft community.  
+Built for the Vietnam Minecraft community.  
 **PhantomX Team** • [Join our Discord](https://discord.gg/PECavu2q4w) • [Report a Bug](https://github.com/hoanglonggg79/PhantomXLauncher/issues)
 
 </div>
