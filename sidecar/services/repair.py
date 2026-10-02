@@ -377,13 +377,16 @@ def analyze_latest_crash(instance_name: str) -> Dict[str, Any]:
     )
     if java_match:
         class_ver = java_match.group(1) if java_match.lastindex else ""
-        suggested_java = "Java 17 hoặc 21"
-        if class_ver == "65":
-            suggested_java = "Java 21"
-        elif class_ver == "61":
-            suggested_java = "Java 17"
-        elif class_ver == "52":
-            suggested_java = "Java 8"
+        # Java class-file major version → Java release (major - 44).
+        # 52 = Java 8, 61 = Java 17, 65 = Java 21, 69 = Java 25 (MC 26.x).
+        known_java = {"52": "Java 8", "61": "Java 17", "65": "Java 21", "69": "Java 25"}
+        if class_ver in known_java:
+            suggested_java = known_java[class_ver]
+        else:
+            try:
+                suggested_java = f"Java {int(class_ver) - 44}"
+            except (TypeError, ValueError):
+                suggested_java = "Java 17 hoặc 21"
 
         return {
             "has_crash": True,

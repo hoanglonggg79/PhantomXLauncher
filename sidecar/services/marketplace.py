@@ -21,7 +21,7 @@ CURSEFORGE_WORKER_URL = "https://curseforge-proxy.hoanglonggg79.workers.dev"
 CURSEFORGE_CLIENT_TOKEN = os.environ.get("PHANTOMX_CF_CLIENT_TOKEN", "")
 MODRINTH_API_URL = "https://api.modrinth.com/v2"
 
-USER_AGENT = "PhantomXLauncher/1.2.0 (hoanglonggg79/PhantomXLauncher)"
+USER_AGENT = "PhantomXLauncher/1.2.1 (hoanglonggg79/PhantomXLauncher)"
 
 CURSEFORGE_HEADERS = {
     "X-PhantomX-Client-Token": CURSEFORGE_CLIENT_TOKEN,

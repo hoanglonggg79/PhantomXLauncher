@@ -110,7 +110,7 @@ if platform.system() == "Windows":
 
 
 APP_NAME    = "PhantomX"
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 APP_AUTHOR  = "PhantomXTeam"
 KEYRING_SVC = "PhantomXLauncher"
 WATERMARK   = "Phát triển bởi HoangLong ❤️ 🇻🇳"
@@ -652,6 +652,7 @@ class MinecraftManager:
         8: "Microsoft.OpenJDK.8",
         17: "Microsoft.OpenJDK.17",
         21: "Microsoft.OpenJDK.21",
+        25: "Microsoft.OpenJDK.25",
     }
 
     def find_java(self) -> Optional[str]:
@@ -717,30 +718,69 @@ class MinecraftManager:
                 unique.append(c)
         return unique[0] if unique else None
 
+    def required_java_for_mc(self, mc_version: str) -> int:
+        """
+        Minimum Java major for *mc_version*.
+
+        Mojang switched to year-based versions in 2026: `26.1`, `26.2`, `26.3`…
+        Those drops are compiled for Java 25 (class file 69.0) and refuse to run
+        on anything older.
+
+        Matrix:
+          MC < 1.17           → Java 8
+          1.17 ≤ MC < 1.20.5  → Java 17
+          1.20.5 ≤ MC < 26    → Java 21
+          MC ≥ 26             → Java 25
+        """
+        import re as _re
+
+        raw = (mc_version or "").strip().lower()
+        if not raw:
+            return 21
+
+        # Week snapshots: "25w46a" (1.21.x line) / "26w14a" (26.x line)
+        m = _re.match(r"^(\d{2})w(\d+)[a-z]?$", raw)
+        if m:
+            return 25 if int(m.group(1)) >= 26 else 21
+
+        raw = _re.sub(r"-(?:snapshot|pre|rc)[-.]?\d+$", "", raw)
+        m = _re.match(r"^(\d+)\.(\d+)(?:\.(\d+))?", raw)
+        if not m:
+            return 21
+
+        first = int(m.group(1))
+        if first == 1:  # legacy "1.20.4"
+            minor = int(m.group(2))
+            patch = int(m.group(3) or 0)
+            if minor < 17:
+                return 8
+            if (minor, patch) < (20, 5):
+                return 17
+            return 21
+        if first >= 26:  # year-based "26.3"
+            return 25
+        return 21
+
     def find_java_for_version(self, mc_version: str) -> Optional[str]:
         try:
-            major = int(mc_version.split(".")[1])
+            target = self.required_java_for_mc(mc_version)
         except Exception:
-            return self.find_java()
-
-        if major < 17:
-            target = 8
-        elif major <= 20:
-            try:
-                minor = int(mc_version.split(".")[2])
-            except Exception:
-                minor = 0
-            if major == 20 and minor >= 5:
-                target = 21
-            else:
-                target = 17
-        else:
             target = 21
 
         all_javas = self._scan_all_java_installs()
         for jp in all_javas:
             if self.java_version(jp) == target:
                 return jp
+
+        # No exact match: prefer the oldest runtime that is still new enough
+        # (Java is backwards compatible), then the newest one we have.
+        graded = [(self.java_version(jp), jp) for jp in all_javas]
+        graded = [(v, jp) for v, jp in graded if v]
+        sufficient = [(v, jp) for v, jp in graded if v >= target]
+        if sufficient:
+            return min(sufficient, key=lambda pair: pair[0])[1]
+        if graded:
+            return max(graded, key=lambda pair: pair[0])[1]
         if all_javas:
             return all_javas[0]
         return None
@@ -1540,6 +1580,7 @@ class MinecraftManager:
             8: "java-runtime-legacy",
             17: "java-runtime-gamma",
             21: "java-runtime-delta",
+            25: "java-runtime-epsilon",
         }
         runtime_name = runtime_map.get(java_version)
         if not runtime_name:
@@ -1597,6 +1638,7 @@ class MinecraftManager:
             "java-runtime-legacy": 8,
             "java-runtime-gamma": 17,
             "java-runtime-delta": 21,
+            "java-runtime-epsilon": 25,
             "java-runtime-alpha": 8,
             "java-runtime-beta": 16,
         }
@@ -2051,6 +2093,7 @@ class JavaRuntimeWorker(QThread):
             "java-runtime-legacy": 8,
             "java-runtime-gamma": 17,
             "java-runtime-delta": 21,
+            "java-runtime-epsilon": 25,
             "java-runtime-alpha": 8,
             "java-runtime-beta": 16,
         }

@@ -52,7 +52,7 @@ PhantomX 1.2.0 is a complete overhaul and ground-up architectural rewrite, trans
 - **Regex 80/20 Crash Log Analyzer:** Instantly diagnoses the root cause of crashes:
   - **Out of Memory (OOM)** $\rightarrow$ Quick action to increase RAM allocation.
   - **Mod Dependency Conflicts** $\rightarrow$ Identifies missing or incompatible mods with quick navigation to Mod Manager.
-  - **Java Version Mismatches** $\rightarrow$ Direct link to switch between Java 8, 17, and 21.
+  - **Java Version Mismatches** $\rightarrow$ Direct link to switch between Java 8, 17, 21, and 25 (reads the class-file version straight from the crash log).
 - **Quick Actions:** One-click **"Copy Log"** button, `options.txt` reset, and global cache cleanup.
 
 ### Identity & Skin System
@@ -62,7 +62,8 @@ PhantomX 1.2.0 is a complete overhaul and ground-up architectural rewrite, trans
 
 ### Java Runtime Manager
 - **System Discovery:** Auto-scans `PATH`, `JAVA_HOME`, Windows Registry, and well-known installation paths.
-- **1-Click Adoptium JRE Downloader:** Automatically download and extract official OpenJDK JRE 8 (Legacy), JRE 17 (Gamma), or JRE 21 (Delta).
+- **1-Click Adoptium JRE Downloader:** Automatically download and extract official OpenJDK JRE 8 (Legacy), JRE 17 (Gamma), JRE 21 (Delta) or JRE 25 (Epsilon, needed by Minecraft 26.x).
+- **Version-aware auto-selection:** The launcher maps each Minecraft version to the Java it needs (`MC < 1.17` → 8, `1.17–1.20.4` → 17, `1.20.5–1.21.x` → 21, `MC ≥ 26.1` → 25) and silently swaps in a newer runtime instead of failing with `UnsupportedClassVersionError`.
 
 ### Ambient Music & Discord Rich Presence
 - **Background Music Player:** Built-in relaxing soundtrack with audio wave animations, volume slider, mute toggle, and seamless Webview autoplay unlocking.

@@ -391,13 +391,49 @@ def _launch(
     ctx.log(f"Launching '{inst.name}' ({launch_vid}) as {username}")
     ctx.progress(1, 4, "Building launch command")
 
+    # Pick a Java runtime that can actually load this Minecraft version. A pinned
+    # Java 21 with Minecraft 26.x (class file 69.0) would die on
+    # UnsupportedClassVersionError, so fall back to a newer runtime when one is
+    # installed / managed by PhantomX.
+    try:
+        from sidecar.services.java import (
+            get_java_info,
+            required_java_for_mc,
+            resolve_java_executable,
+        )
+
+        effective_java = resolve_java_executable(launch_vid, java_path)
+        required_major = required_java_for_mc(launch_vid)
+        ctx.log(
+            f"Java: {effective_java or 'java (PATH)'} "
+            f"(Minecraft {launch_vid} cần Java {required_major}+)"
+        )
+        if (effective_java or "").strip().lower() != (java_path or "").strip().lower():
+            ctx.log(
+                f"⚠️ Java trong cài đặt ({java_path or 'trống'}) không phù hợp "
+                f"với Minecraft {launch_vid} — đã tự động chọn: {effective_java}",
+                level="warning",
+            )
+
+        actual_major = get_java_info(effective_java).get("major") if effective_java else None
+        if actual_major and actual_major < required_major:
+            ctx.log(
+                f"⚠️ Java {actual_major} không thể chạy Minecraft {launch_vid} "
+                f"(class file cần Java {required_major}+). Mở Cài đặt → Java "
+                f"Runtime rồi tải Java {required_major} để chơi phiên bản này.",
+                level="warning",
+            )
+    except Exception as e:
+        logger.debug(f"Java pre-resolution failed, using configured path: {e}")
+        effective_java = java_path
+
     cmd = mgr.build_command(
         launch_vid,
         username,
         inst.game_dir,
         ram,
         extra_jvm,
-        java_path,
+        effective_java,
         uuid=session_uuid,
         token=session_token,
     )

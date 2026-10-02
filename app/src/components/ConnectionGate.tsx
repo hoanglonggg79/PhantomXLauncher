@@ -10,6 +10,7 @@ export function ConnectionGate() {
   const connect = useAppStore((s) => s.connect)
   const startupStep = useAppStore((s) => s.startupStep)
   const startupProgress = useAppStore((s) => s.startupProgress)
+  const appVersion = useAppStore((s) => s.info?.app_version)
 
   return (
     <div className="relative grid h-full place-items-center overflow-hidden bg-void px-6">
@@ -48,7 +49,7 @@ export function ConnectionGate() {
             <div>
               <div className="flex items-center justify-center gap-2">
                 <span className="text-xs font-mono tracking-widest text-accent uppercase">
-                  PHANTOMX OS // v1.2.0
+                  PHANTOMX OS // v{appVersion ?? '1.2.1'}
                 </span>
               </div>
               <h1 className="mt-1 text-xl font-bold tracking-tight text-white drop-shadow-sm">

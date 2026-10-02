@@ -35,10 +35,11 @@ const SOURCE_VARIANT: Record<JavaSource, 'neon' | 'accent' | 'muted'> = {
 const MAJOR_LABEL: Record<number, string> = {
   8: 'Java 8  (MC < 1.17)',
   17: 'Java 17 (MC 1.17–1.20.4)',
-  21: 'Java 21 (MC ≥ 1.20.5)',
+  21: 'Java 21 (MC 1.20.5–1.21.x)',
+  25: 'Java 25 (MC ≥ 26.1)',
 }
 
-const REQUIRED_MAJORS = [8, 17, 21] as const
+const REQUIRED_MAJORS = [8, 17, 21, 25] as const
 
 function JreRow({ install }: { install: JavaInstall }) {
   const isPhantomX = install.source === 'phantomx'
@@ -183,12 +184,13 @@ export function JavaManagerSection() {
         <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted">
           Required by Minecraft version
         </p>
-        <div className="grid grid-cols-3 gap-2 text-[11px]">
+        <div className="grid grid-cols-4 gap-2 text-[11px]">
           {(
             [
               { label: 'MC < 1.17', java: 8 },
               { label: 'MC 1.17 – 1.20.4', java: 17 },
-              { label: 'MC ≥ 1.20.5', java: 21 },
+              { label: 'MC 1.20.5 – 1.21.x', java: 21 },
+              { label: 'MC ≥ 26.1', java: 25 },
             ] as const
           ).map(({ label, java: maj }) => (
             <div

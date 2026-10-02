@@ -43,7 +43,12 @@ export interface JavaStatus {
   path: string
   major: number | null
   required_for_mc: number | null
-  version_matrix: { lt_1_17: number; '1.17_to_1.20.4': number; gte_1_20_5: number } | null
+  version_matrix: {
+    lt_1_17: number
+    '1.17_to_1.20.4': number
+    '1.20.5_to_1.21': number
+    gte_26: number
+  } | null
   installs_count: number
 }
 

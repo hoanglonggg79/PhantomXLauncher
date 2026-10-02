@@ -58,8 +58,12 @@ def check_java(java_path: str = "") -> dict:
     badge; diagnostics needs the resolved path and major version too. Kept here
     so the diagnostics module can call `core.check_java()` without building its
     own manager (and without tripping over core.py's logger setup).
+
+    Returns ``{ok, message, path, major}`` — never raises.
     """
     try:
+        import json as _json
+
         # Reuse the shared manager: constructing a fresh MinecraftManager() would
         # create BASE_DIR/default as a side effect of a read-only diagnostics call.
         try:
@@ -69,9 +73,41 @@ def check_java(java_path: str = "") -> dict:
         except Exception:
             manager = MinecraftManager()
 
-        ok, message = manager.check_java(java_path)
-        path = manager.find_java() if not java_path else java_path
+        path = (java_path or "").strip()
+
+        # No explicit path: fall back to the one saved in config.json, otherwise
+        # `check_java()` below resolves it — but we still need it for `major`.
+        if not path and CONFIG_FILE.exists():
+            try:
+                cfg = _json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+                path = str(cfg.get("java_path") or "").strip()
+            except Exception:
+                path = ""
+
+        ok, message = manager.check_java(path)
+
+        if not (path and Path(path).is_file()):
+            path = manager.find_java() or path
+
         major = manager.java_version(path) if path and Path(path).is_file() else None
+
+        # Last resort: the scan in the java service sees runtimes that
+        # `find_java()` misses (managed jre-XX folders, Adoptium, Zulu, …).
+        if major is None or not path:
+            try:
+                from sidecar.services.java import scan_java_installations
+
+                installs = [i for i in scan_java_installations() if i.get("path")]
+                if installs:
+                    best = max(installs, key=lambda i: i.get("major") or 0)
+                    if not path:
+                        path = best["path"]
+                        ok, message = True, f"✅ Java {best.get('major')} — {path}"
+                    if major is None:
+                        major = best.get("major")
+            except Exception:
+                pass
+
         return {
             "ok": bool(ok),
             "message": message,

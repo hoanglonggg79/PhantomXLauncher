@@ -26,6 +26,16 @@ LOADER_ASSETS = {
 }
 
 
+def _app_version() -> str:
+    """Live APP_VERSION from core, so the presence never drifts from the build."""
+    try:
+        from sidecar.services.core_service import get_core
+
+        return str(getattr(get_core(), "APP_VERSION", "1.2.1"))
+    except Exception:
+        return "1.2.1"
+
+
 class DiscordRpcService:
     def __init__(self, client_id: str = DISCORD_CLIENT_ID):
         self.client_id = client_id
@@ -155,16 +165,16 @@ class DiscordRpcService:
                 "details": "Dạo quanh Marketplace",
                 "state": "Đang tìm kiếm Mods",
                 "large_image": "logo_phantomx",
-                "large_text": "PhantomX Launcher v1.2.0",
+                "large_text": f"PhantomX Launcher v{_app_version()}",
                 "buttons": DEFAULT_BUTTONS,
             }
 
         # Default: idle
         return {
             "details": "Browsing Launcher",
-            "state": "v1.2.0 • Idle",
+            "state": f"v{_app_version()} • Idle",
             "large_image": "logo_phantomx",
-            "large_text": "PhantomX Launcher v1.2.0",
+            "large_text": f"PhantomX Launcher v{_app_version()}",
             "buttons": DEFAULT_BUTTONS,
         }
 

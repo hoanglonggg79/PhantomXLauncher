@@ -66,9 +66,14 @@ def java_status(mc_version: str = Query(default="", description="Optional MC ver
     version using the canonical mapping matrix:
       MC < 1.17           → Java 8
       1.17 ≤ MC < 1.20.5  → Java 17
-      MC ≥ 1.20.5         → Java 21
+      1.20.5 ≤ MC < 26    → Java 21
+      MC ≥ 26 (26.1 …)    → Java 25
     """
-    from sidecar.services.java import required_java_for_mc, scan_java_installations
+    from sidecar.services.java import (
+        JAVA_VERSION_MATRIX,
+        required_java_for_mc,
+        scan_java_installations,
+    )
 
     mgr = get_manager()
     ok, message = mgr.check_java()
@@ -76,11 +81,7 @@ def java_status(mc_version: str = Query(default="", description="Optional MC ver
     major = mgr.java_version(path) if path else None
 
     # Build the version-mapping table (always included so the UI can display it)
-    version_matrix = {
-        "lt_1.17": 8,
-        "1.17_to_1.20.4": 17,
-        "gte_1.20.5": 21,
-    }
+    version_matrix = dict(JAVA_VERSION_MATRIX)
 
     required: Optional[int] = None
     if mc_version:

@@ -41,7 +41,7 @@ from sidecar.utils.file_ops import (
 CF_API_KEY = os.environ.get("CF_API_KEY", "")
 CURSEFORGE_WORKER_URL = "https://curseforge-proxy.hoanglonggg79.workers.dev"
 CURSEFORGE_CLIENT_TOKEN = os.environ.get("PHANTOMX_CF_CLIENT_TOKEN", "")
-USER_AGENT = "PhantomXLauncher/1.2.0 (hoanglonggg79/PhantomXLauncher)"
+USER_AGENT = "PhantomXLauncher/1.2.1 (hoanglonggg79/PhantomXLauncher)"
 
 
 def _cf_api_key() -> str:

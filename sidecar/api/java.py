@@ -9,13 +9,13 @@ from sidecar.services import java as java_svc
 
 router = APIRouter(tags=["java"])
 
-VALID_MAJORS = {8, 17, 21}
+VALID_MAJORS = set(java_svc.SUPPORTED_JAVA_MAJORS)
 
 
 class InstallJavaRequest(BaseModel):
     major: int = Field(
-        description="Java major version to install (8, 17, or 21).",
-        examples=[21],
+        description="Java major version to install (8, 17, 21 or 25).",
+        examples=[25],
     )
 
 
@@ -45,7 +45,7 @@ def install_java(body: InstallJavaRequest) -> Dict[str, Any]:
     Eclipse Temurin (Adoptium) API.  Returns 202 with `{task_id, major}`
     immediately; follow progress on GET /api/events/{task_id}.
 
-    Supported majors: 8, 17, 21.
+    Supported majors: 8, 17, 21, 25 (25 is required by Minecraft 26.x).
     """
     if body.major not in VALID_MAJORS:
         raise HTTPException(

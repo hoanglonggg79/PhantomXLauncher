@@ -39,7 +39,7 @@ def get_changelog(force_refresh: bool = False) -> Dict[str, Any]:
     global _cache, _cache_time
 
     core = get_core()
-    current_version = getattr(core, "APP_VERSION", "1.2.0")
+    current_version = getattr(core, "APP_VERSION", "1.2.1")
 
     now = time.time()
     if not force_refresh and _cache is not None and (now - _cache_time < CACHE_TTL_SECS):
@@ -124,7 +124,7 @@ def check_version_update() -> Dict[str, Any]:
     Returns current version, latest version, has_update flag, and repo URL.
     """
     core = get_core()
-    current_version = getattr(core, "APP_VERSION", "1.2.0").strip()
+    current_version = getattr(core, "APP_VERSION", "1.2.1").strip()
     current_tuple = _parse_version_tuple(current_version)
 
     latest_version = current_version

@@ -11,10 +11,43 @@ from loguru import logger
 import psutil
 import requests
 
-from sidecar.services.core_service import get_core
+from sidecar.services.core_service import get_core, get_manager
 from sidecar.utils import path_resolver
 
 BUG_REPORT_WORKER_URL = "https://bugs-report.hoanglonggg79.workers.dev/"
+
+
+def _java_status() -> Dict[str, Any]:
+    """
+    Java status dict for the diagnostics report.
+
+    `core` (sidecar.core_bridge) exposes `check_java()`. Older sidecar builds did
+    not, which surfaced as "Could not check Java status: module
+    'sidecar.core_bridge' has no attribute 'check_java'" and left the whole Java
+    row blank. Query the manager directly in that case instead of giving up.
+    """
+    core = get_core()
+    check_java = getattr(core, "check_java", None)
+    if callable(check_java):
+        try:
+            return check_java()
+        except Exception as e:
+            logger.debug(f"core.check_java() failed, falling back to manager: {e}")
+
+    try:
+        mgr = get_manager()
+        ok, message = mgr.check_java()
+        path = mgr.find_java() or ""
+        major = mgr.java_version(path) if path else None
+        return {
+            "ok": bool(ok),
+            "message": message,
+            "path": path,
+            "major": major,
+        }
+    except Exception as e:
+        logger.debug(f"Manager java check failed: {e}")
+        return {"ok": False, "message": str(e), "path": "", "major": None}
 
 
 def get_gpu_info() -> str:
@@ -46,8 +79,6 @@ def get_system_specs() -> Dict[str, str]:
     """
     Gathers environment and hardware specifications for GDPR opt-in diagnostics.
     """
-    core = get_core()
-
     # OS
     os_name = f"{platform.system()} {platform.release()} ({platform.architecture()[0]})"
     try:
@@ -77,9 +108,11 @@ def get_system_specs() -> Dict[str, str]:
     # Java
     java_ver_str = "Not detected"
     try:
-        java_status = core.check_java()
-        if java_status and java_status.get("ok"):
+        java_status = _java_status()
+        if java_status and java_status.get("ok") and java_status.get("major"):
             java_ver_str = f"Java {java_status.get('major')} ({java_status.get('path')})"
+        elif java_status and java_status.get("ok"):
+            java_ver_str = java_status.get("message") or "Java detected"
         elif java_status:
             java_ver_str = java_status.get("message", "Invalid Java")
     except Exception as e:
@@ -135,7 +168,7 @@ def get_diagnostics_context() -> Dict[str, Any]:
     Returns pre-filled specs and log preview for the UI Report Bug dialog.
     """
     core = get_core()
-    app_version = getattr(core, "APP_VERSION", "1.2.0")
+    app_version = getattr(core, "APP_VERSION", "1.2.1")
     specs = get_system_specs()
     log_path, snippet = get_latest_log_info(40)
 
@@ -171,7 +204,7 @@ def submit_bug_report(
         return {"status": "error", "message": "Spam detected."}
 
     core = get_core()
-    app_version = getattr(core, "APP_VERSION", "1.2.0")
+    app_version = getattr(core, "APP_VERSION", "1.2.1")
 
     # Construct user message
     parts = []

@@ -1,38 +1,24 @@
 from __future__ import annotations
 
-import base64
-import json
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import requests
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding
 from fastapi import APIRouter, HTTPException
 from loguru import logger
 from pydantic import BaseModel, Field
 
 from sidecar.services import core_service, elyby_auth, hwid
+from sidecar.services import supporter as supporter_svc
 
 WORKER_API_BASE = "https://phantomx-supporter-api.hoanglonggg79.workers.dev"
 
-SUPPORTER_PUBLIC_KEY_PEM = """-----BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArXoH8vIMorBF73KP4oH9
-qyyIUgANCTBBkg3HUn3Bl+vu3T+cBk7iVgJA1S9SDtDJagQw0dCu2Nd+/7IUKI1p
-ouZyKeWxRdYRngDbA0DqPn7Ooumd/r/h734kjhz668SGXwLmI3UIH0UrhTslmyQd
-illpm9NyC7hWW7i3o1btZWdzJcKs1Efzx9jBl1UYx+ER7odgAv2BRwat19yPITsW
-tODCZP5j03pFuQMUOEq7PjyrKnTKKltrK0MOloRhJ2EMINTjugWITNjsDHxIn8/o
-RxQ58x5qCTS8gGCPtnllJtrR9kAVu4h9BPqIyrVxKjrNT9/inVVnKn7uX36RvIcm
-/wIDAQAB
------END PUBLIC KEY-----"""
-
-try:
-    _public_key = serialization.load_pem_public_key(SUPPORTER_PUBLIC_KEY_PEM.encode("utf-8"))
-    logger.debug("Supporter public key loaded successfully")
-except Exception as e:
-    _public_key = None
-    logger.error(f"Failed to load supporter public key: {e}")
+# Re-exported: the RSA public key and the offline token decoder now live in the
+# service layer so the launch path (`instances._launch` → Discord RPC) can use
+# them without going through FastAPI.
+SUPPORTER_PUBLIC_KEY_PEM = supporter_svc.SUPPORTER_PUBLIC_KEY_PEM
+verify_token = supporter_svc.verify_token
+_verify_token = supporter_svc.verify_token
 
 # ── Request / Response models ─────────────────────────────────────────────────
 
@@ -48,57 +34,6 @@ class RedeemRequest(BaseModel):
 
 
 # ── Verification & Persistence logic ──────────────────────────────────────────
-
-
-def _verify_token(token: str) -> Dict[str, Any]:
-    """
-    Legacy RSA token decode and verify.
-    Returns a dict with:
-      { valid: bool, badge?: str, discord_id?: str, issued_at?: int, error?: str }
-    """
-    if _public_key is None:
-        return {"valid": False, "error": "Public key unavailable — sidecar misconfigured"}
-
-    if not token or not isinstance(token, str):
-        return {"valid": False, "error": "Token is required"}
-
-    try:
-        padding_needed = (4 - len(token) % 4) % 4
-        padded = token + "=" * padding_needed
-        try:
-            raw = base64.urlsafe_b64decode(padded)
-        except Exception:
-            return {"valid": False, "error": "Invalid token format: Base64URL decode failed"}
-
-        null_idx = raw.find(b"\x00")
-        if null_idx == -1:
-            return {"valid": False, "error": "Invalid token format: missing null separator"}
-
-        payload_bytes = raw[:null_idx]
-        signature = raw[null_idx + 1:]
-
-        try:
-            payload = json.loads(payload_bytes.decode("utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            return {"valid": False, "error": "Invalid payload: not valid JSON"}
-
-        try:
-            _public_key.verify(signature, payload_bytes, padding.PKCS1v15(), hashes.SHA256())
-        except InvalidSignature:
-            return {"valid": False, "error": "Invalid signature"}
-        except Exception as e:
-            return {"valid": False, "error": f"Signature verification error: {e}"}
-
-        return {
-            "valid": True,
-            "badge": payload.get("tier", "supporter"),
-            "discord_id": payload.get("discord_id"),
-            "issued_at": payload.get("issued_at"),
-        }
-
-    except Exception as e:
-        logger.warning(f"Unexpected error during token verification: {e}")
-        return {"valid": False, "error": f"Verification failed: {e}"}
 
 
 def _persist_cloud_supporter(result: Dict[str, Any], key_code: str, hwid_hash: str) -> None:
