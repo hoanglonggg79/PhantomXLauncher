@@ -226,7 +226,7 @@ def get_diagnostics_context() -> Dict[str, Any]:
     Returns pre-filled specs and log preview for the UI Report Bug dialog.
     """
     core = get_core()
-    app_version = getattr(core, "APP_VERSION", "1.2.1")
+    app_version = getattr(core, "APP_VERSION", "1.2.2")
     specs = get_system_specs()
     log_path, snippet = get_latest_log_info(40)
 
@@ -262,7 +262,7 @@ def submit_bug_report(
         return {"status": "error", "message": "Spam detected."}
 
     core = get_core()
-    app_version = getattr(core, "APP_VERSION", "1.2.1")
+    app_version = getattr(core, "APP_VERSION", "1.2.2")
 
     # Construct user message
     parts = []

@@ -31,9 +31,9 @@ def _app_version() -> str:
     try:
         from sidecar.services.core_service import get_core
 
-        return str(getattr(get_core(), "APP_VERSION", "1.2.1"))
+        return str(getattr(get_core(), "APP_VERSION", "1.2.2"))
     except Exception:
-        return "1.2.1"
+        return "1.2.2"
 
 
 class DiscordRpcService:

@@ -49,7 +49,7 @@ export function ConnectionGate() {
             <div>
               <div className="flex items-center justify-center gap-2">
                 <span className="text-xs font-mono tracking-widest text-accent uppercase">
-                  PHANTOMX OS // v{appVersion ?? '1.2.1'}
+                  PHANTOMX OS // v{appVersion ?? '1.2.2'}
                 </span>
               </div>
               <h1 className="mt-1 text-xl font-bold tracking-tight text-white drop-shadow-sm">

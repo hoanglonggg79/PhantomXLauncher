@@ -29,7 +29,7 @@ CURSEFORGE_CLIENT_TOKEN = os.environ.get(
 )
 MODRINTH_API_URL = "https://api.modrinth.com/v2"
 
-USER_AGENT = "PhantomXLauncher/1.2.1 (hoanglonggg79/PhantomXLauncher)"
+USER_AGENT = "PhantomXLauncher/1.2.2 (hoanglonggg79/PhantomXLauncher)"
 
 CURSEFORGE_HEADERS = {
     "X-PhantomX-Client-Token": CURSEFORGE_CLIENT_TOKEN,
