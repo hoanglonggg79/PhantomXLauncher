@@ -369,6 +369,9 @@ export interface InstallMarketplaceModPayload {
   file_id: string
   download_url: string
   filename: string
+  /** Compatibility metadata of the selected file; the sidecar rejects mismatches. */
+  version_loaders?: string[]
+  version_game_versions?: string[]
 }
 
 export interface InstallMarketplaceModResponse {

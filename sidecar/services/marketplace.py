@@ -4,21 +4,29 @@ import json
 import os
 from pathlib import Path
 import re
+import threading
+import time
 from typing import Any, Dict, List, Optional
 import urllib.parse
 import urllib.request
 
 from loguru import logger
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from sidecar.services.core_service import get_core
 from sidecar.services.tasks import TaskContext
 from sidecar.utils.file_ops import safe_file_operation
 
 CURSEFORGE_WORKER_URL = "https://curseforge-proxy.hoanglonggg79.workers.dev"
-# Never commit this: supply it as PHANTOMX_CF_CLIENT_TOKEN. An empty token makes
-# the proxy answer 403, which is reported back as `available=False`.
-CURSEFORGE_CLIENT_TOKEN = os.environ.get("PHANTOMX_CF_CLIENT_TOKEN", "")
+# Client token the proxy worker requires on every request; without it the worker
+# answers 403 and CurseForge is reported as `available=False`. Shipped in the
+# build on purpose: it is a client token, not the worker's admin secret.
+# PHANTOMX_CF_CLIENT_TOKEN overrides it (e.g. after rotating the token).
+CURSEFORGE_CLIENT_TOKEN = os.environ.get(
+    "PHANTOMX_CF_CLIENT_TOKEN", "ptx_548e813da32dc70a8f03f5a5"
+)
 MODRINTH_API_URL = "https://api.modrinth.com/v2"
 
 USER_AGENT = "PhantomXLauncher/1.2.1 (hoanglonggg79/PhantomXLauncher)"
@@ -55,6 +63,64 @@ MODRINTH_HEADERS = {
     "User-Agent": USER_AGENT,
     "Accept": "application/json",
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HTTP transport + project cache
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Every call used to be a bare `requests.get`, which builds a brand-new session
+# (and therefore a full TLS handshake) per request: measured ~1.0s for a project
+# and ~1.3s for its versions, versus ~0.05s over a keep-alive session. One shared
+# session with a pool sized for the API fan-out removes that cost, and a short
+# TTL cache on project metadata removes the second round trip when the user
+# re-opens the same mod.
+_SESSION = requests.Session()
+_SESSION.mount(
+    "https://",
+    HTTPAdapter(
+        pool_connections=10,
+        pool_maxsize=24,
+        max_retries=Retry(
+            total=2,
+            backoff_factor=0.4,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset(["GET"]),
+        ),
+    ),
+)
+_SESSION.mount(
+    "http://",
+    HTTPAdapter(pool_connections=10, pool_maxsize=24, max_retries=2),
+)
+
+PROJECT_CACHE_TTL = 300  # seconds — project metadata barely changes
+_project_cache: Dict[str, tuple[float, Dict[str, Any]]] = {}
+_project_cache_lock = threading.Lock()
+
+
+def _cache_get(key: str) -> Optional[Dict[str, Any]]:
+    with _project_cache_lock:
+        entry = _project_cache.get(key)
+        if entry is None:
+            return None
+        stored_at, value = entry
+        if time.time() - stored_at > PROJECT_CACHE_TTL:
+            _project_cache.pop(key, None)
+            return None
+        return value
+
+
+def _cache_put(key: str, value: Dict[str, Any]) -> None:
+    if "error" in value:
+        return
+    with _project_cache_lock:
+        _project_cache[key] = (time.time(), value)
+
+
+def clear_project_cache() -> None:
+    """Drop cached project metadata (used by tests and by the refresh button)."""
+    with _project_cache_lock:
+        _project_cache.clear()
 
 # A dead proxy Worker 403s on every keystroke-driven search; log the first
 # occurrence at ERROR and then stay quiet so the sidecar log stays readable.
@@ -125,7 +191,7 @@ def search_modrinth(
     logger.info(f"Modrinth search: {query} (ver: {mc_version}, loader: {loader}, offset: {offset})")
 
     try:
-        resp = requests.get(url, headers=MODRINTH_HEADERS, params=params, timeout=12)
+        resp = _SESSION.get(url, headers=MODRINTH_HEADERS, params=params, timeout=12)
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
@@ -169,11 +235,17 @@ def search_modrinth(
 
 def get_modrinth_project(project_id: str) -> Dict[str, Any]:
     """
-    Get full metadata and gallery for a Modrinth project.
+    Get full metadata and gallery for a Modrinth project (cached for 5 minutes).
     """
+    cache_key = f"modrinth:{project_id}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        logger.debug(f"Modrinth project {project_id} served from cache")
+        return cached
+
     url = f"{MODRINTH_API_URL}/project/{urllib.parse.quote(project_id)}"
     try:
-        resp = requests.get(url, headers=MODRINTH_HEADERS, timeout=12)
+        resp = _SESSION.get(url, headers=MODRINTH_HEADERS, timeout=12)
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
@@ -195,7 +267,7 @@ def get_modrinth_project(project_id: str) -> Dict[str, Any]:
     # Raw icon URL (if Modrinth returns an unoptimized original or if CDN has resize params)
     raw_icon = icon_url
 
-    return {
+    result = {
         "source": "modrinth",
         "id": data.get("id", project_id),
         "slug": data.get("slug", ""),
@@ -216,6 +288,8 @@ def get_modrinth_project(project_id: str) -> Dict[str, Any]:
         "issues_url": data.get("issues_url", ""),
         "wiki_url": data.get("wiki_url", ""),
     }
+    _cache_put(cache_key, result)
+    return result
 
 
 def get_modrinth_versions(
@@ -234,7 +308,7 @@ def get_modrinth_versions(
         params["loaders"] = json.dumps([loader.lower()])
 
     try:
-        resp = requests.get(url, headers=MODRINTH_HEADERS, params=params, timeout=12)
+        resp = _SESSION.get(url, headers=MODRINTH_HEADERS, params=params, timeout=12)
         resp.raise_for_status()
         raw_versions = resp.json()
     except Exception as e:
@@ -327,7 +401,7 @@ def search_curseforge(
     logger.info(f"CurseForge search via worker: {query} (ver: {mc_version}, loader: {loader_type}, offset: {offset})")
 
     try:
-        resp = requests.get(url, headers=curseforge_headers(), params=params, timeout=15)
+        resp = _SESSION.get(url, headers=curseforge_headers(), params=params, timeout=15)
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
@@ -336,9 +410,9 @@ def search_curseforge(
         # so say that instead of returning an empty grid with no explanation.
         status = getattr(getattr(e, "response", None), "status_code", None)
         message = (
-            "Máy chủ CurseForge đang từ chối yêu cầu (HTTP 403). "
-            "Đây là lỗi phía máy chủ proxy, vui lòng thử lại sau hoặc dùng Modrinth."
-            if status == 403
+            "Máy chủ CurseForge đang từ chối yêu cầu (HTTP 401/403). "
+            "Đây là lỗi phía máy chủ proxy (API key), vui lòng thử lại sau hoặc dùng Modrinth."
+            if status in (401, 403)
             else f"Không thể tìm kiếm trên CurseForge: {e}"
         )
         _log_curseforge_failure(f"CurseForge search failed (status={status}): {e}")
@@ -398,11 +472,17 @@ def search_curseforge(
 
 def get_curseforge_project(project_id: str) -> Dict[str, Any]:
     """
-    Get full metadata and screenshots gallery for a CurseForge mod.
+    Get full metadata and screenshots gallery for a CurseForge mod (cached 5 min).
     """
+    cache_key = f"curseforge:{project_id}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        logger.debug(f"CurseForge project {project_id} served from cache")
+        return cached
+
     url = f"{CURSEFORGE_WORKER_URL}/v1/mods/{urllib.parse.quote(str(project_id))}"
     try:
-        resp = requests.get(url, headers=curseforge_headers(), timeout=15)
+        resp = _SESSION.get(url, headers=curseforge_headers(), timeout=15)
         resp.raise_for_status()
         data = resp.json().get("data", {})
     except Exception as e:
@@ -429,7 +509,7 @@ def get_curseforge_project(project_id: str) -> Dict[str, Any]:
 
     links = data.get("links", {})
 
-    return {
+    result = {
         "source": "curseforge",
         "id": str(data.get("id", project_id)),
         "slug": data.get("slug", ""),
@@ -449,6 +529,8 @@ def get_curseforge_project(project_id: str) -> Dict[str, Any]:
         "issues_url": links.get("issuesUrl", ""),
         "wiki_url": links.get("wikiUrl", ""),
     }
+    _cache_put(cache_key, result)
+    return result
 
 
 def get_curseforge_versions(
@@ -470,7 +552,7 @@ def get_curseforge_versions(
         params["modLoaderType"] = loader_type
 
     try:
-        resp = requests.get(url, headers=curseforge_headers(), params=params, timeout=15)
+        resp = _SESSION.get(url, headers=curseforge_headers(), params=params, timeout=15)
         resp.raise_for_status()
         raw_files = resp.json().get("data", [])
     except Exception as e:
@@ -485,7 +567,7 @@ def get_curseforge_versions(
         # If downloadUrl is null, resolve using download-url endpoint or fallback
         if not dl_url and file_id:
             try:
-                dl_res = requests.get(
+                dl_res = _SESSION.get(
                     f"{CURSEFORGE_WORKER_URL}/v1/mods/{project_id}/files/{file_id}/download-url",
                     headers=curseforge_headers(),
                     timeout=10,
@@ -540,6 +622,140 @@ def get_curseforge_versions(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Instance compatibility (loader / Minecraft version)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# The marketplace used to ask Modrinth/CurseForge for *every* version of a
+# project and let the UI pick the first one, which happily installed a
+# NeoForge 26.3 jar into a Fabric 1.20.4 instance. Two guards now exist:
+#   1. filters are derived from the instance when the client sends none;
+#   2. every install is validated against the instance before it starts.
+
+# Quilt runs Fabric mods; nothing else is cross-compatible.
+_LOADER_COMPAT = {
+    "fabric": {"fabric"},
+    "quilt": {"quilt", "fabric"},
+    "forge": {"forge"},
+    "neoforge": {"neoforge"},
+    "vanilla": set(),
+}
+
+# "1.20.4", "1.21", "26.3" — but NOT "19.0.147" (a mod version, not a game version).
+_MC_VERSION_RE = re.compile(r"(?:^|[^\d.])((?:1\.\d{1,2}|2\d\.\d{1,2})(?:\.\d{1,2})?)(?![\d.])")
+_LOADER_TOKEN_RE = re.compile(r"(neoforge|forge|fabric|quilt)")
+
+
+def instance_filters(instance_name: str) -> Dict[str, str]:
+    """
+    mc_version/loader to filter a marketplace query with, taken from an instance.
+
+    Vanilla instances return an empty loader: they cannot load mods at all, and
+    pretending otherwise is what let the UI offer unrelated files.
+    """
+    from sidecar.services import instances as inst_svc
+
+    instance = inst_svc.get_instance(instance_name)
+    loader = (getattr(instance, "loader", "") or "").lower()
+    return {
+        "mc_version": (getattr(instance, "version_id", "") or "").strip(),
+        "loader": "" if loader == "vanilla" else loader,
+    }
+
+
+def _loader_from_filename(filename: str) -> str:
+    match = _LOADER_TOKEN_RE.search((filename or "").lower())
+    return match.group(1) if match else ""
+
+
+def _mc_version_from_filename(filename: str) -> str:
+    """
+    Best-effort MC version out of a jar name ("sodium-fabric-0.7.3+mc1.21.8").
+
+    Only used when the marketplace metadata is missing, and deliberately narrow:
+    a wrong guess would block a valid install.
+    """
+    low = (filename or "").lower()
+    match = re.search(r"mc(\d{1,2}\.\d{1,2}(?:\.\d{1,2})?)", low)
+    if match:
+        return match.group(1)
+    match = _MC_VERSION_RE.search(low)
+    return match.group(1) if match else ""
+
+
+def _mc_minor(version: str) -> str:
+    """Keep major.minor only: '1.21.7' -> '1.21', '26.3' -> '26.3'."""
+    return ".".join(str(version).split(".")[:2])
+
+
+def validate_mod_compat(
+    instance,
+    filename: str,
+    loaders: Optional[List[str]] = None,
+    game_versions: Optional[List[str]] = None,
+    *,
+    trust_filename_version: bool = True,
+) -> None:
+    """
+    Raise ValueError with a user-facing message when the file cannot work in
+    `instance`. Only rejects on a *positive* mismatch: unknown metadata passes.
+
+    `trust_filename_version=False` drops the MC-version guess from the jar name
+    (it is a heuristic); the loader token is kept because names like
+    "-neoforge-" are unambiguous.
+    """
+    loader = (getattr(instance, "loader", "") or "").lower()
+    mc_version = (getattr(instance, "version_id", "") or "").strip()
+    instance_label = f"{loader.capitalize() if loader else 'Vanilla'} {mc_version}".strip()
+
+    if loader == "vanilla":
+        raise ValueError(
+            f"Instance '{instance.name}' là Vanilla nên không nạp được mod. "
+            "Hãy tạo instance Fabric / Forge / NeoForge / Quilt rồi cài lại."
+        )
+
+    allowed = _LOADER_COMPAT.get(loader, {loader})
+
+    declared = [str(l).lower() for l in (loaders or []) if l]
+    if declared:
+        if not (set(declared) & allowed):
+            raise ValueError(
+                f"Mod này chỉ có bản cho {', '.join(sorted(set(declared)))} — "
+                f"instance '{instance.name}' đang dùng {instance_label}."
+            )
+    else:
+        from_name = _loader_from_filename(filename)
+        if from_name and from_name not in allowed:
+            raise ValueError(
+                f"File '{filename}' là bản {from_name} — "
+                f"instance '{instance.name}' đang dùng {instance_label}."
+            )
+
+    supported = [str(v) for v in (game_versions or []) if v]
+    if supported:
+        if mc_version and mc_version not in supported:
+            sample = ", ".join(supported[:6]) + ("…" if len(supported) > 6 else "")
+            raise ValueError(
+                f"Mod này không có bản cho Minecraft {mc_version} "
+                f"(chỉ hỗ trợ: {sample})."
+            )
+    else:
+        from_name = _mc_version_from_filename(filename)
+        # Compare major.minor only: a 1.21.7 jar usually runs on 1.21.8, but a
+        # 1.12.2 jar in a 26.3 instance never will. Patch-level guesses are too
+        # weak to reject an install.
+        if (
+            trust_filename_version
+            and from_name
+            and mc_version
+            and _mc_minor(from_name) != _mc_minor(mc_version)
+        ):
+            raise ValueError(
+                f"File '{filename}' dành cho Minecraft {from_name} — "
+                f"instance '{instance.name}' đang dùng {instance_label}."
+            )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Mod Installation Task (SSE Streamed + Windows File Locking Safe)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -570,11 +786,18 @@ def install_mod_task(
             "Vui lòng tắt game Minecraft trước khi cài đặt mod mới vào thư mục mods/."
         )
 
+    # Last line of defence: the API layer already validated with full metadata,
+    # but a direct caller (or an old client) must not slip a wrong-loader or
+    # wrong-Minecraft jar in. The filename heuristics compare major.minor only,
+    # so a 1.21.7 jar is still accepted on 1.21.8.
+    validate_mod_compat(instance, filename)
+
     inst_dir = Path(instance.game_dir)
     mods_dir = inst_dir / "mods"
     mods_dir.mkdir(parents=True, exist_ok=True)
     target_file = mods_dir / filename
 
+    ctx.mark_stage("download mod")
     ctx.log(f"Starting installation of '{project_title}' ({source}) into instance '{instance_name}'…")
     ctx.progress(0, 100, f"Preparing to download {filename}…")
 
@@ -591,7 +814,7 @@ def install_mod_task(
     if source == "curseforge":
         headers["X-PhantomX-Client-Token"] = curseforge_client_token()
 
-    resp = requests.get(download_url, headers=headers, stream=True, timeout=30)
+    resp = _SESSION.get(download_url, headers=headers, stream=True, timeout=(10, 30))
     resp.raise_for_status()
 
     total_size = int(resp.headers.get("content-length", 0))

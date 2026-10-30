@@ -19,6 +19,10 @@ from urllib.parse import urlparse, parse_qs
 
 from loguru import logger
 
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
 try:
     from PyQt6.QtCore import QThread, pyqtSignal, QObject, QUrl
     from PyQt6.QtGui import QDesktopServices
@@ -239,6 +243,39 @@ MCL_DOWNLOAD_TIMEOUT = 30     # seconds, per request (stock passes none at all)
 MCL_CONNECT_TIMEOUT = 10      # seconds to establish the TCP/TLS connection
 INSTALL_ATTEMPTS = 3          # whole-install retries in install_vanilla()
 
+# mcll shares ONE `requests.session()` between all download workers
+# (`install.py` creates it, then fans out over ThreadPoolExecutor). requests'
+# default adapter caps the pool at 10 connections per host, so 8 workers plus the
+# extra socket a redirect keeps open overflow it and urllib3 starts logging
+# "Connection pool is full, discarding connection: piston-data.mojang.com".
+# We cannot resize mcll's session from the outside, so every download goes
+# through a thread-local session of our own with a pool big enough for the
+# worker count — which also gives us keep-alive (no TLS handshake per file).
+_download_session_local = threading.local()
+
+
+def _download_session() -> requests.Session:
+    """Thread-local download session: keep-alive + a pool sized for the workers."""
+    session = getattr(_download_session_local, "session", None)
+    if session is not None:
+        return session
+
+    session = requests.Session()
+    adapter = HTTPAdapter(
+        pool_connections=MCL_DOWNLOAD_WORKERS,
+        pool_maxsize=MCL_DOWNLOAD_WORKERS * 4,
+        max_retries=Retry(
+            total=2,
+            backoff_factor=0.5,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset(["GET"]),
+        ),
+    )
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    _download_session_local.session = session
+    return session
+
 # ── Mojang version manifest sources ──────────────────────────────────────────
 #
 # mcll hard-codes the legacy `launchermeta.mojang.com` host. Mojang migrated it
@@ -310,7 +347,7 @@ def _get_with_source_chain(url: str, attempts: int = MANIFEST_ATTEMPTS):
     for source in _manifest_source_chain(url):
         for attempt in range(1, attempts + 1):
             try:
-                response = requests.get(
+                response = _download_session().get(
                     source,
                     headers={"user-agent": "PhantomX-Sidecar/1.0"},
                     timeout=(MCL_CONNECT_TIMEOUT, MCL_DOWNLOAD_TIMEOUT),
@@ -480,12 +517,15 @@ def _resilient_download_file(
 
     for attempt in range(1, MCL_DOWNLOAD_RETRIES + 1):
         try:
-            getter = session.get if session is not None else requests.get
+            # Deliberately ignore the `session` mcll passes in: it is one shared
+            # session with the default 10-connection pool, used by 8 threads at
+            # once (see `_download_session()` for why that logs "pool is full").
+            getter = _download_session().get
             response = getter(
                 url,
                 stream=True,
                 headers={"user-agent": get_user_agent()},
-                timeout=MCL_DOWNLOAD_TIMEOUT,
+                timeout=(MCL_CONNECT_TIMEOUT, MCL_DOWNLOAD_TIMEOUT),
             )
             try:
                 if response.status_code != 200:
@@ -639,12 +679,28 @@ class MinecraftManager:
         self.game_dir = game_dir or str(BASE_DIR / "default")
         Path(self.game_dir).mkdir(parents=True, exist_ok=True)
         self._cf_key = os.environ.get("CF_API_KEY", self.CURSEFORGE_KEY)
+        # Set by install_fabric() so callers can persist what actually landed.
+        self.last_fabric_loader_version: str = ""
 
     @property
     def session(self) -> requests.Session:
         if MinecraftManager._session is None:
             s = requests.Session()
             s.headers.update({"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+            # Shared across worker threads (loader lists, Forge promos, Modrinth):
+            # the default pool of 10 is what produced "Connection pool is full".
+            adapter = HTTPAdapter(
+                pool_connections=10,
+                pool_maxsize=20,
+                max_retries=Retry(
+                    total=2,
+                    backoff_factor=0.4,
+                    status_forcelist=(429, 500, 502, 503, 504),
+                    allowed_methods=frozenset(["GET"]),
+                ),
+            )
+            s.mount("https://", adapter)
+            s.mount("http://", adapter)
             MinecraftManager._session = s
         return MinecraftManager._session
 
@@ -1125,20 +1181,77 @@ class MinecraftManager:
         cb_log=None,
     ) -> bool:
         try:
+            # Resolve the loader version BEFORE installing, never hand mcll a bare
+            # `None`: that made the log line read "loader=None" and left nothing
+            # behind to persist or validate against.
+            lv = (loader_version or "").strip() or self.resolve_fabric_loader(mc_version)
+            if not lv:
+                logger.warning(
+                    f"install_fabric: no loader version could be resolved for MC {mc_version}; "
+                    "letting minecraft-launcher-lib pick its own latest"
+                )
             if cb_log:
-                cb_log(f"🧵 Đang cài Fabric {loader_version or 'latest'} cho phiên bản {mc_version}…")
-            lv = loader_version.strip() or None
+                cb_log(f"🧵 Đang cài Fabric {lv or 'latest'} cho phiên bản {mc_version}…")
             jp = java_path.strip() or None
             if jp and jp.lower().endswith("javaw.exe"):
                 jp = jp[:-9] + "java.exe"
-            mcll.fabric.install_fabric(mc_version, game_dir, loader_version=lv, java=jp)
-            logger.info(f"Fabric installed: mc={mc_version} loader={lv}")
+            mcll.fabric.install_fabric(mc_version, game_dir, loader_version=lv or None, java=jp)
+            self.last_fabric_loader_version = lv
+            logger.info(f"Fabric installed: mc={mc_version} loader={lv or '(mcll latest)'}")
+
+            # Validate: the profile folder mcll writes is
+            # versions/fabric-loader-<loader>-<mc>. If nothing like it exists the
+            # install did not really land, so report failure instead of success.
+            if lv and not self.fabric_profile_installed(mc_version, lv, game_dir):
+                logger.error(
+                    f"install_fabric: profile fabric-loader-{lv}-{mc_version} missing after install"
+                )
+                if cb_log:
+                    # Single argument on purpose: the legacy PyQt path passes
+                    # `signal.emit`, which takes exactly one str.
+                    cb_log(f"❌ Không thấy profile fabric-loader-{lv}-{mc_version} sau khi cài.")
+                return False
             return True
         except Exception as e:
             logger.error(f"install_fabric: {e}")
             if cb_log:
                 cb_log(f"❌ Lỗi cài đặt Fabric: {e}")
             return False
+
+    def resolve_fabric_loader(self, mc_version: str) -> str:
+        """
+        Concrete Fabric loader build for an MC version (newest first).
+
+        Falls back to the global latest loader when Fabric's meta has no entry for
+        this version, and to "" when the network is unreachable.
+        """
+        versions = self.get_fabric_loaders(mc_version)
+        if versions:
+            return versions[0]
+        try:
+            latest = mcll.fabric.get_latest_loader_version()
+            logger.warning(
+                f"resolve_fabric_loader: Fabric meta has no loader list for {mc_version}, "
+                f"using global latest {latest}"
+            )
+            return latest or ""
+        except Exception as e:
+            logger.warning(f"resolve_fabric_loader: {e}")
+            return ""
+
+    def fabric_profile_installed(self, mc_version: str, loader_version: str, game_dir: str) -> bool:
+        """True when versions/fabric-loader-<loader>-<mc> exists (or an equivalent name)."""
+        versions_dir = Path(game_dir) / "versions"
+        if not versions_dir.is_dir():
+            return False
+        if (versions_dir / f"fabric-loader-{loader_version}-{mc_version}").is_dir():
+            return True
+        # mcll has changed this folder name before; accept any fabric profile that
+        # targets the same MC version rather than failing a good install.
+        for entry in versions_dir.iterdir():
+            if entry.is_dir() and "fabric" in entry.name.lower() and mc_version in entry.name:
+                return True
+        return False
 
     def install_forge(
         self,

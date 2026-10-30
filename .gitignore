@@ -48,6 +48,10 @@ build/
 staging/
 PhantomX-*-win64.zip
 
+# Discord bot của hệ thống supporter — repo riêng, không thuộc launcher.
+# Token nằm trong Bot/tken.txt (Bot/.gitignore cũng tự loại nó).
+Bot/
+
 *.log
 logs/
 sidecar/logs/

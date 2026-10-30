@@ -19,6 +19,21 @@ class TaskContext:
         self.task_id = task_id
         self._bus = get_event_bus()
         self._cancelled = threading.Event()
+        # Name of the step currently running. Recorded so a cancel can say *where*
+        # it landed, and so a late cancel can be reported honestly.
+        self._stage = "starting"
+
+    @property
+    def stage(self) -> str:
+        return self._stage
+
+    def mark_stage(self, stage: str) -> None:
+        """
+        Declare the step about to run. Raises TaskCancelled when a cancel already
+        arrived, so the worker stops before doing more work instead of after.
+        """
+        self._stage = stage
+        self.check_cancelled(stage)
 
     def log(self, message: str, level: str = "info") -> None:
         self._bus.emit_log(self.task_id, message, level=level)
@@ -26,21 +41,26 @@ class TaskContext:
     def progress(self, current: int, total: int, label: str = "") -> None:
         self._bus.emit_progress(self.task_id, current, total, label)
 
-    def cancel(self) -> None:
+    def cancel(self, *, actor: str = "client") -> None:
         """
         Flag the task as cancelled. Cooperative: the worker only stops where it
-        calls check_cancelled() (or reads .cancelled), so blocking third-party
-        installers keep running until their current step returns.
+        calls check_cancelled()/mark_stage() (or reads .cancelled), so blocking
+        third-party installers keep running until their current step returns.
         """
         if self._cancelled.is_set():
             return
         self._cancelled.set()
-        self.log("Cancellation requested by the client", level="warning")
+        logger.info(
+            f"Cancel requested by {actor} for task {self.task_id} at stage '{self._stage}'"
+        )
+        self.log(
+            f"Cancellation requested by {actor} (stage: {self._stage})", level="warning"
+        )
 
-    def check_cancelled(self) -> None:
+    def check_cancelled(self, step: str = "") -> None:
         """Raise TaskCancelled if cancellation was requested. Call between steps."""
         if self._cancelled.is_set():
-            raise TaskCancelled("Task cancelled")
+            raise TaskCancelled(f"Task cancelled at stage '{step or self._stage}'")
 
     @property
     def cancelled(self) -> bool:
@@ -71,15 +91,43 @@ def start_task(
     def worker():
         try:
             result = fn(ctx)
-            bus.emit_complete(task_id, True, result if isinstance(result, dict) else None)
-        except TaskCancelled:
-            logger.info(f"Task {name} ({task_id}) cancelled")
-            ctx.log("Task cancelled", level="warning")
-            bus.emit_complete(task_id, False, {"cancelled": True, "error": "Task cancelled"})
+            payload = result if isinstance(result, dict) else None
+            if ctx.cancelled:
+                # The cancel arrived while the last blocking step was finishing.
+                # The work may be done, but the client asked to stop: never report
+                # a clean success, and say which stage the cancel landed on.
+                logger.info(
+                    f"Task {name} ({task_id}) returned after cancel "
+                    f"(stage '{ctx.stage}') — emitting cancelled, not success"
+                )
+                ctx.log(
+                    f"Task finished after cancellation was requested (stage: {ctx.stage})",
+                    level="warning",
+                )
+                bus.emit_complete(
+                    task_id,
+                    False,
+                    {
+                        "cancelled": True,
+                        "error": "Task cancelled",
+                        "stage": ctx.stage,
+                        "partial_result": payload,
+                    },
+                )
+                return
+            bus.emit_complete(task_id, True, payload)
+        except TaskCancelled as e:
+            logger.info(f"Task {name} ({task_id}) cancelled at stage '{ctx.stage}': {e}")
+            ctx.log(f"Task cancelled at stage '{ctx.stage}'", level="warning")
+            bus.emit_complete(
+                task_id,
+                False,
+                {"cancelled": True, "error": "Task cancelled", "stage": ctx.stage},
+            )
         except Exception as e:
-            logger.exception(f"Task {name} ({task_id}) failed: {e}")
-            ctx.log(f"Task failed: {e}", level="error")
-            bus.emit_complete(task_id, False, {"error": str(e)})
+            logger.exception(f"Task {name} ({task_id}) failed at stage '{ctx.stage}': {e}")
+            ctx.log(f"Task failed at stage '{ctx.stage}': {e}", level="error")
+            bus.emit_complete(task_id, False, {"error": str(e), "stage": ctx.stage})
         finally:
             with _lock:
                 _running.pop(task_id, None)
@@ -94,16 +142,18 @@ def get_context(task_id: str) -> Optional[TaskContext]:
         return _running.get(task_id)
 
 
-def request_cancel(task_id: str) -> bool:
+def request_cancel(task_id: str, *, actor: str = "client") -> bool:
     """
     Flag a running task as cancelled. Returns False when the id is unknown, i.e.
     the task already finished (or never existed).
     """
     ctx = get_context(task_id)
     if ctx is None:
+        logger.info(
+            f"Cancel ignored for task {task_id}: no live worker (already finished or unknown)"
+        )
         return False
-    ctx.cancel()
-    logger.info(f"Cancel requested for task {task_id}")
+    ctx.cancel(actor=actor)
     return True
 
 

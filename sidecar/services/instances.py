@@ -242,13 +242,28 @@ def _install(ctx: TaskContext, inst) -> Dict[str, Any]:
     settings = load_settings()
     java_path = str(settings.get("java_path") or "")
 
+    ctx.mark_stage(f"vanilla {inst.version_id}")
     ctx.log(f"Installing Minecraft {inst.version_id} for '{inst.name}'")
     if not mgr.install_vanilla(
         inst.version_id, inst.game_dir, cb_progress=ctx.progress, cb_log=ctx.log
     ):
         raise RuntimeError(f"Failed to install Minecraft {inst.version_id}")
+    # mcll's vanilla install is one long blocking call; honour a cancel that
+    # arrived while it was running instead of marching on to the loader.
+    ctx.check_cancelled("after vanilla install")
 
     if inst.loader != "vanilla":
+        # Fabric: pin a concrete loader build now, persist it, and install exactly
+        # that build. Leaving it empty is what produced
+        # "Fabric installed: mc=26.3 loader=None" and an unverifiable instance.
+        # (Quilt keeps its own meta index, so it is not resolved from Fabric's.)
+        if inst.loader == "fabric" and not (inst.loader_version or "").strip():
+            resolved = mgr.resolve_fabric_loader(inst.version_id)
+            if resolved:
+                inst.loader_version = resolved
+                save_instance(inst)
+                ctx.log(f"Resolved Fabric loader version: {resolved}")
+
         ctx.log(f"Installing {inst.loader} {inst.loader_version or '(latest)'}")
         from sidecar.services.java import resolve_java_executable
         java = resolve_java_executable(inst.version_id, java_path)
@@ -262,10 +277,18 @@ def _install(ctx: TaskContext, inst) -> Dict[str, Any]:
         else:
             ctx.log("⚠️ No explicit Java runtime found. Attempting system PATH fallback.", level="warning")
 
+        ctx.mark_stage(f"{inst.loader} {inst.loader_version or 'latest'}")
+
         if inst.loader == "fabric":
             ok = mgr.install_fabric(
                 inst.version_id, inst.loader_version, inst.game_dir, java_path=java, cb_log=ctx.log
             )
+            # mcll may have resolved a build on its own when we passed none; keep
+            # whatever actually landed so later repairs/launches agree with disk.
+            if ok and not (inst.loader_version or "").strip() and mgr.last_fabric_loader_version:
+                inst.loader_version = mgr.last_fabric_loader_version
+                save_instance(inst)
+                ctx.log(f"Recorded Fabric loader version: {inst.loader_version}")
         elif inst.loader == "quilt":
             ok = mgr.install_quilt(
                 inst.version_id, inst.loader_version, inst.game_dir, java_path=java, cb_log=ctx.log
@@ -277,6 +300,8 @@ def _install(ctx: TaskContext, inst) -> Dict[str, Any]:
                 if not candidates:
                     raise RuntimeError(f"No Forge build found for {inst.version_id}")
                 forge_version = candidates[0]
+                inst.loader_version = forge_version
+                save_instance(inst)
                 ctx.log(f"Resolved Forge version: {forge_version}")
             ok = mgr.install_forge(
                 inst.version_id, forge_version, inst.game_dir, java, cb_log=ctx.log
@@ -290,7 +315,9 @@ def _install(ctx: TaskContext, inst) -> Dict[str, Any]:
 
         if not ok:
             raise RuntimeError(f"Failed to install {inst.loader} for {inst.version_id}")
+        ctx.check_cancelled(f"after {inst.loader} install")
 
+    ctx.mark_stage("finalizing")
     ctx.log(f"'{inst.name}' is ready to play")
     return {"instance": serialize(inst)}
 
@@ -306,6 +333,13 @@ def resolve_launch_version(inst) -> str:
 
     if inst.loader in ("fabric", "forge", "quilt", "neoforge"):
         keyword = inst.loader.lower()
+        loader_version = (getattr(inst, "loader_version", "") or "").strip()
+        if keyword == "fabric" and loader_version:
+            # Pinned loader build: prefer the exact profile over keyword matching,
+            # otherwise two fabric profiles for the same MC version race on sort order.
+            exact = versions_dir / f"fabric-loader-{loader_version}-{inst.version_id}"
+            if exact.is_dir():
+                return exact.name
         matches = [
             d.name
             for d in sorted(versions_dir.iterdir(), reverse=True)

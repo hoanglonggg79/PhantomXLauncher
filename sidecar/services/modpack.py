@@ -40,7 +40,10 @@ from sidecar.utils.file_ops import (
 # underscore-prefixed variants used by the packaging scripts.
 CF_API_KEY = os.environ.get("CF_API_KEY", "")
 CURSEFORGE_WORKER_URL = "https://curseforge-proxy.hoanglonggg79.workers.dev"
-CURSEFORGE_CLIENT_TOKEN = os.environ.get("PHANTOMX_CF_CLIENT_TOKEN", "")
+# Same shipped-by-default client token as marketplace.py; env overrides it.
+CURSEFORGE_CLIENT_TOKEN = os.environ.get(
+    "PHANTOMX_CF_CLIENT_TOKEN", "ptx_548e813da32dc70a8f03f5a5"
+)
 USER_AGENT = "PhantomXLauncher/1.2.1 (hoanglonggg79/PhantomXLauncher)"
 
 

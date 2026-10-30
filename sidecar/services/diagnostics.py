@@ -50,25 +50,83 @@ def _java_status() -> Dict[str, Any]:
         return {"ok": False, "message": str(e), "path": "", "major": None}
 
 
+GPU_DETECT_TIMEOUT = 8  # seconds — 3s was too tight for a cold PowerShell start
+
+_gpu_cache: Optional[str] = None
+
+
+def _gpu_from_registry() -> str:
+    """
+    Read display adapter names straight from the registry.
+
+    No subprocess, so it cannot time out: HKLM\\SYSTEM\\CurrentControlSet\\Control\\
+    Video\\{adapter-guid}\\0000\\DriverDesc. Used as a fallback because `wmic` no
+    longer ships with Windows 11 24H2+.
+    """
+    try:
+        import winreg
+    except ImportError:
+        return ""
+
+    names: list = []
+    base = r"SYSTEM\CurrentControlSet\Control\Video"
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, base) as video:
+            index = 0
+            while True:
+                try:
+                    adapter = winreg.EnumKey(video, index)
+                except OSError:
+                    break
+                index += 1
+                try:
+                    with winreg.OpenKey(video, rf"{adapter}\0000") as key:
+                        desc, _ = winreg.QueryValueEx(key, "DriverDesc")
+                        if desc and desc not in names:
+                            names.append(str(desc).strip())
+                except OSError:
+                    continue
+    except OSError:
+        return ""
+
+    return ", ".join(n for n in names if n)
+
+
 def get_gpu_info() -> str:
-    """Retrieve GPU name on Windows via PowerShell or WMIC without blocking."""
+    """
+    GPU name on Windows, cached for the process lifetime (it cannot change).
+
+    Tries PowerShell (8s budget), then the registry, then WMIC.
+    """
+    global _gpu_cache
+    if _gpu_cache is not None:
+        return _gpu_cache
+
     try:
         cmd = ["powershell", "-NoProfile", "-Command", "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name"]
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=GPU_DETECT_TIMEOUT)
         if res.returncode == 0:
             lines = [line.strip() for line in res.stdout.strip().splitlines() if line.strip()]
             if lines:
-                return ", ".join(lines)
+                _gpu_cache = ", ".join(lines)
+                return _gpu_cache
     except Exception as e:
         logger.debug(f"PowerShell GPU detection failed: {e}")
 
+    registry_names = _gpu_from_registry()
+    if registry_names:
+        logger.debug("GPU detection served from registry")
+        _gpu_cache = registry_names
+        return _gpu_cache
+
     try:
         cmd = ["wmic", "path", "win32_VideoController", "get", "name"]
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=GPU_DETECT_TIMEOUT)
         if res.returncode == 0:
             lines = [line.strip() for line in res.stdout.strip().splitlines() if line.strip() and line.strip().lower() != "name"]
             if lines:
-                return ", ".join(lines)
+                _gpu_cache = ", ".join(lines)
+                return _gpu_cache
     except Exception as e:
         logger.debug(f"WMIC GPU detection failed: {e}")
 

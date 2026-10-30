@@ -102,6 +102,8 @@ interface AppState {
   marketplaceVersions: MarketplaceVersion[]
   marketplaceVersionsLoading: boolean
   marketplaceDetailOpen: boolean
+  /** Instance the marketplace is currently installing into (drives version filters). */
+  marketplaceInstanceName: string
 
   // ── Bug Report Dialog (Sprint 3A) ────────────────────────────────────────
   bugReportOpen: boolean
@@ -167,11 +169,13 @@ interface AppState {
   searchMarketplace: () => Promise<void>
   openMarketplaceDetail: (source: MarketplaceSource, projectId: string) => Promise<void>
   closeMarketplaceDetail: () => void
+  setMarketplaceInstance: (instanceName: string) => void
   loadMarketplaceVersions: (
     source: MarketplaceSource,
     projectId: string,
     mcVersion?: string,
-    loader?: string
+    loader?: string,
+    instanceName?: string
   ) => Promise<void>
   installMarketplaceMod: (payload: {
     instanceName: string
@@ -181,6 +185,8 @@ interface AppState {
     fileId: string
     downloadUrl: string
     filename: string
+    versionLoaders?: string[]
+    versionGameVersions?: string[]
   }) => Promise<boolean>
 
   // ── Modpack actions (Sprint 3B) ──────────────────────────────────────────
@@ -319,6 +325,16 @@ export const useAppStore = create<AppState>((set, get) => {
           const detail = (event.result?.error as string) || 'Task failed'
           get().notify({ tone: 'error', message: detail })
         }
+        if (cancelled) {
+          const stage = (event.result?.stage as string) || ''
+          get().notify({
+            tone: 'info',
+            message: stage ? `Đã huỷ tác vụ (dừng ở bước: ${stage})` : 'Đã huỷ tác vụ',
+          })
+          // A cancelled install may have left partial files behind; refresh so the
+          // instance card stops claiming "installed".
+          void get().refreshInstances()
+        }
 
         // If launcher was hidden on launch, restore it when game exits
         if (kind === 'launch' && get().settings?.close_on_launch) {
@@ -441,6 +457,7 @@ export const useAppStore = create<AppState>((set, get) => {
     marketplaceVersions: [],
     marketplaceVersionsLoading: false,
     marketplaceDetailOpen: false,
+    marketplaceInstanceName: '',
 
     // Bug Report Dialog (Sprint 3A)
     bugReportOpen: false,
@@ -858,26 +875,55 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     openMarketplaceDetail: async (source, projectId) => {
+      const state = get()
+      const instanceName =
+        state.marketplaceInstanceName ||
+        state.instances[0]?.name ||
+        ''
+      const instance = state.instances.find((i) => i.name === instanceName)
+      const canTakeMods = !!instance && instance.loader !== 'vanilla'
+
       set({
         marketplaceDetailOpen: true,
         marketplaceSelectedProject: null,
         marketplaceProjectLoading: true,
         marketplaceVersions: [],
-        marketplaceVersionsLoading: true,
+        marketplaceVersionsLoading: canTakeMods,
+        marketplaceInstanceName: instanceName,
       })
-      try {
-        const project = await api.marketplaceProject(source, projectId)
-        set({ marketplaceSelectedProject: project, marketplaceProjectLoading: false })
 
-        // Auto-fetch versions using current filter if any
-        const { marketplaceMcVersion, marketplaceLoader } = get()
-        void get().loadMarketplaceVersions(source, projectId, marketplaceMcVersion, marketplaceLoader)
-      } catch (error) {
-        set({
-          marketplaceProjectLoading: false,
-          marketplaceVersionsLoading: false,
-          notice: { tone: 'error', message: describeError(error) }
-        })
+      // Project metadata and versions are independent requests: fire both at
+      // once instead of paying two sequential round trips per click.
+      // allSettled so a failed version query still leaves the project details
+      // on screen (and vice versa).
+      const [projectResult, versionsResult] = await Promise.allSettled([
+        api.marketplaceProject(source, projectId),
+        canTakeMods
+          ? api.marketplaceVersions(source, projectId, {
+              mc_version: instance.version_id,
+              loader: instance.loader,
+              instance_name: instanceName,
+            })
+          : Promise.resolve([] as MarketplaceVersion[]),
+      ])
+
+      set({
+        marketplaceSelectedProject:
+          projectResult.status === 'fulfilled' ? projectResult.value : null,
+        marketplaceProjectLoading: false,
+        marketplaceVersions:
+          versionsResult.status === 'fulfilled' ? versionsResult.value : [],
+        marketplaceVersionsLoading: false,
+      })
+
+      const failure =
+        projectResult.status === 'rejected'
+          ? projectResult.reason
+          : versionsResult.status === 'rejected'
+            ? versionsResult.reason
+            : null
+      if (failure) {
+        set({ notice: { tone: 'error', message: describeError(failure) } })
       }
     },
 
@@ -889,12 +935,34 @@ export const useAppStore = create<AppState>((set, get) => {
       })
     },
 
-    loadMarketplaceVersions: async (source, projectId, mcVersion = '', loader = '') => {
+    setMarketplaceInstance: (instanceName) => {
+      const state = get()
+      set({ marketplaceInstanceName: instanceName })
+      const project = state.marketplaceSelectedProject
+      if (!project) return
+
+      const instance = state.instances.find((i) => i.name === instanceName)
+      if (!instance || instance.loader === 'vanilla') {
+        // Vanilla cannot load mods; show that instead of an unrelated file list.
+        set({ marketplaceVersions: [], marketplaceVersionsLoading: false })
+        return
+      }
+      void get().loadMarketplaceVersions(
+        project.source,
+        project.id,
+        instance.version_id,
+        instance.loader,
+        instanceName
+      )
+    },
+
+    loadMarketplaceVersions: async (source, projectId, mcVersion = '', loader = '', instanceName = '') => {
       set({ marketplaceVersionsLoading: true })
       try {
         const versions = await api.marketplaceVersions(source, projectId, {
           mc_version: mcVersion,
           loader,
+          instance_name: instanceName || undefined,
         })
         set({ marketplaceVersions: versions })
       } catch (error) {
@@ -924,6 +992,8 @@ export const useAppStore = create<AppState>((set, get) => {
           file_id: payload.fileId,
           download_url: payload.downloadUrl,
           filename: payload.filename,
+          version_loaders: payload.versionLoaders,
+          version_game_versions: payload.versionGameVersions,
         })
         track(
           handle.task_id,

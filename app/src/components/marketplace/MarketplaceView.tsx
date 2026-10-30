@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Download,
   Flame,
@@ -22,7 +22,10 @@ import { ModDetailModal } from './ModDetailModal'
 import { ModpackView } from './ModpackView'
 
 
-const COMMON_MC_VERSIONS = [
+// Fallback only: the live list comes from the sidecar's version manifest, which
+// is what makes 26.x (and any future scheme) selectable. The hardcoded list used
+// to stop at 1.21.4, so a 26.3 instance could not even filter for its own version.
+const FALLBACK_MC_VERSIONS = [
   '1.21.4',
   '1.21.1',
   '1.20.4',
@@ -72,6 +75,8 @@ export function MarketplaceView() {
   const setFilters = useAppStore((s) => s.setMarketplaceFilters)
   const search = useAppStore((s) => s.searchMarketplace)
   const openDetail = useAppStore((s) => s.openMarketplaceDetail)
+  const allVersions = useAppStore((s) => s.versions)
+  const loadVersions = useAppStore((s) => s.loadVersions)
 
   const [localQuery, setLocalQuery] = useState(query)
   const [marketplaceTab, setMarketplaceTab] = useState<'mods' | 'modpacks'>('mods')
@@ -82,6 +87,17 @@ export function MarketplaceView() {
       void search()
     }
   }, [])
+
+  // Populate the version filter from the manifest instead of a stale constant,
+  // so instances on 26.x can filter for their own version.
+  useEffect(() => {
+    if (allVersions.length === 0) void loadVersions(false)
+  }, [allVersions.length, loadVersions])
+
+  const mcVersionOptions = useMemo(() => {
+    const releases = allVersions.filter((v) => v.type === 'release').map((v) => v.id)
+    return releases.length > 0 ? releases : FALLBACK_MC_VERSIONS
+  }, [allVersions])
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -199,7 +215,7 @@ export function MarketplaceView() {
                   <SelectItem value="all" className="text-xs">
                     Mọi phiên bản
                   </SelectItem>
-                  {COMMON_MC_VERSIONS.map((v) => (
+                  {mcVersionOptions.map((v) => (
                     <SelectItem key={v} value={v} className="text-xs">
                       Minecraft {v}
                     </SelectItem>

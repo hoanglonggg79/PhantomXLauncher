@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
+from loguru import logger
 from pydantic import BaseModel, Field
 
 from sidecar.services import marketplace
@@ -20,6 +21,10 @@ class InstallModPayload(BaseModel):
     file_id: str = Field(default="")
     download_url: str
     filename: str
+    # Compatibility metadata of the *selected* file. Optional so older clients
+    # keep working; when present it is authoritative for validation.
+    version_loaders: List[str] = Field(default_factory=list)
+    version_game_versions: List[str] = Field(default_factory=list)
 
 
 @router.get("/search")
@@ -84,10 +89,34 @@ def get_versions(
     project_id: str,
     mc_version: str = Query(default=""),
     loader: str = Query(default=""),
+    instance_name: str = Query(
+        default="",
+        description="Fallback context: when mc_version/loader are empty, derive them from this instance",
+    ),
 ) -> List[Dict[str, Any]]:
     """
     Retrieve compatible versions and file download links.
+
+    Filters come from the client's selected instance. When the client cannot
+    supply them (older builds, direct calls), `instance_name` is used as a
+    fallback so the list is never "every loader for every Minecraft version".
     """
+    if instance_name and not (mc_version and loader):
+        try:
+            resolved = marketplace.instance_filters(instance_name)
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Instance '{instance_name}' does not exist: {e}",
+            )
+        mc_version = mc_version or resolved["mc_version"]
+        loader = loader or resolved["loader"]
+        if not loader:
+            # Vanilla instance: no loader can ever match, so return an explicit
+            # empty list instead of unrelated files.
+            logger.info(f"versions {project_id}: instance '{instance_name}' is vanilla, no loader filter")
+            return []
+
     src = source.lower()
     if src == "curseforge":
         return marketplace.get_curseforge_versions(
@@ -130,6 +159,22 @@ def install_mod(payload: InstallModPayload) -> Dict[str, Any]:
     clean_filename = payload.filename.strip()
     if not clean_filename.endswith(".jar"):
         clean_filename = f"{clean_filename}.jar"
+
+    # Compatibility gate: refuse a jar that cannot run in this instance, with a
+    # message that names the loader/version, instead of installing it silently.
+    try:
+        marketplace.validate_mod_compat(
+            instance,
+            clean_filename,
+            payload.version_loaders,
+            payload.version_game_versions,
+        )
+    except ValueError as e:
+        logger.warning(
+            f"install rejected: {clean_filename} -> {payload.instance_name} "
+            f"({instance.loader} {instance.version_id}): {e}"
+        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
     task_id = start_task(
         lambda ctx: marketplace.install_mod_task(

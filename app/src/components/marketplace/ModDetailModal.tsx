@@ -40,20 +40,23 @@ export function ModDetailModal() {
   const versionsLoading = useAppStore((s) => s.marketplaceVersionsLoading)
   const instances = useAppStore((s) => s.instances)
   const installMod = useAppStore((s) => s.installMarketplaceMod)
+  const selectedInstanceName = useAppStore((s) => s.marketplaceInstanceName)
+  const setSelectedInstanceName = useAppStore((s) => s.setMarketplaceInstance)
 
-  const [selectedInstanceName, setSelectedInstanceName] = useState<string>('')
   const [selectedVersionId, setSelectedVersionId] = useState<string>('')
   const [activeImageIndex, setActiveImageIndex] = useState<number>(0)
   const [showRawIcon, setShowRawIcon] = useState<boolean>(false)
   const [lightboxImage, setLightboxImage] = useState<MarketplaceGalleryImage | null>(null)
   const [installing, setInstalling] = useState<boolean>(false)
 
-  // Initialize selected instance
+  // Keep the store's instance selection valid when instances change/disappear.
+  // The store owns it so the version query can be filtered by it.
   useEffect(() => {
-    if (instances.length > 0 && !selectedInstanceName) {
+    if (!open || instances.length === 0) return
+    if (!instances.some((i) => i.name === selectedInstanceName)) {
       setSelectedInstanceName(instances[0].name)
     }
-  }, [instances, selectedInstanceName])
+  }, [open, instances, selectedInstanceName, setSelectedInstanceName])
 
   // Select first primary or first available version
   useEffect(() => {
@@ -95,6 +98,10 @@ export function ModDetailModal() {
 
   const selectedInstance = instances.find((i) => i.name === selectedInstanceName)
   const isInstanceBusy = selectedInstance?.running === true
+  const isVanillaInstance = selectedInstance?.loader === 'vanilla'
+  const targetLoaderLabel = selectedInstance
+    ? `${selectedInstance.loader === 'vanilla' ? 'Vanilla' : selectedInstance.loader.charAt(0).toUpperCase() + selectedInstance.loader.slice(1)} ${selectedInstance.version_id}`
+    : ''
   const selectedVersion = versions.find((v) => v.id === selectedVersionId) || versions[0]
   const targetFile = selectedVersion?.files?.find((f) => f.primary) || selectedVersion?.files?.[0]
 
@@ -110,6 +117,10 @@ export function ModDetailModal() {
       fileId: targetFile.id,
       downloadUrl: targetFile.download_url,
       filename: targetFile.filename,
+      // Send the file's own compatibility data so the sidecar can refuse a
+      // loader/version mismatch instead of writing a dead jar into mods/.
+      versionLoaders: selectedVersion.loaders,
+      versionGameVersions: selectedVersion.game_versions,
     })
     setInstalling(false)
 
@@ -343,11 +354,15 @@ export function ModDetailModal() {
                           {versionsLoading ? (
                             <div className="flex h-9 items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 text-xs text-muted">
                               <Loader2 className="size-3.5 animate-spin text-accent" />
-                              Đang tải phiên bản…
+                              Đang tìm bản phù hợp với {targetLoaderLabel}…
+                            </div>
+                          ) : isVanillaInstance ? (
+                            <div className="flex min-h-9 items-center rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+                              Instance Vanilla không nạp được mod. Hãy tạo instance Fabric / Forge / NeoForge / Quilt.
                             </div>
                           ) : versions.length === 0 ? (
-                            <div className="flex h-9 items-center rounded-lg border border-white/10 bg-white/5 px-3 text-xs text-muted">
-                              Không tìm thấy file tương thích
+                            <div className="flex min-h-9 items-center rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-muted">
+                              Mod này không có bản cho {targetLoaderLabel || 'instance đang chọn'}.
                             </div>
                           ) : (
                             <Select
@@ -407,6 +422,10 @@ export function ModDetailModal() {
                     <span>
                       File: <strong className="text-ink">{targetFile.filename}</strong> ({(targetFile.size / (1024 * 1024)).toFixed(2)} MB)
                     </span>
+                  ) : isVanillaInstance ? (
+                    <span className="text-amber-300">Instance Vanilla không nạp được mod</span>
+                  ) : versions.length === 0 && selectedInstanceName ? (
+                    <span className="text-amber-300">Không có bản cho {targetLoaderLabel}</span>
                   ) : (
                     <span>Chưa chọn file tải</span>
                   )}

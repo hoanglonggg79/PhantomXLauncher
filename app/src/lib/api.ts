@@ -351,7 +351,7 @@ export const api = {
   async marketplaceVersions(
     source: MarketplaceSource,
     projectId: string,
-    params?: { mc_version?: string; loader?: string }
+    params?: { mc_version?: string; loader?: string; instance_name?: string }
   ): Promise<MarketplaceVersion[]> {
     const { data } = await getApiClient().get<MarketplaceVersion[]>(
       `/api/marketplace/versions/${source}/${encodeURIComponent(projectId)}`,
