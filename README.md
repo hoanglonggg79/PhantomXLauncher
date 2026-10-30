@@ -1,4 +1,4 @@
-# PhantomX Minecraft Launcher (v1.2.1)
+# PhantomX Minecraft Launcher (v1.2.2)
 
 <div align="center">
 
@@ -23,32 +23,37 @@
 
 ---
 
-## Highlights of Version 1.2.0
+## What is new in Version 1.2.2
 
-PhantomX 1.2.0 is a complete overhaul and ground-up architectural rewrite, transitioning from legacy PyQt to a modern **3-Tier Desktop Architecture**.
+A maintenance release driven by bug reports from players. It stops the marketplace from installing mods that cannot run, makes task cancellation honest, and removes the slow spots when browsing CurseForge.
 
----
+**Marketplace compatibility**
 
-## What is new in Version 1.2.1
+- The marketplace now derives its version and loader filters from the selected instance instead of letting the UI pick the first hit, so a NeoForge 26.3 jar can no longer be installed into a Fabric 1.20.4 instance.
+- Every install is validated twice (API layer and install task): a mismatched loader or Minecraft version is refused with a clear message naming both sides, instead of silently writing a dead jar into `mods/`.
+- Vanilla instances cannot load mods at all — the version list shows an explicit notice instead of unrelated files.
+- The version filter reads the live version manifest instead of a hardcoded list that stopped at 1.21.4, so 26.x is selectable. Compatibility compares major.minor only, so a 1.21.7 mod still installs on 1.21.8.
 
-A maintenance release driven by bug reports from players. It adds Java 25 support, so Minecraft's new year-based releases can actually start.
+**Faster marketplace**
 
-**Java 25 / Minecraft 26.x**
+- All Modrinth and CurseForge calls go through one keep-alive session with connection pooling and automatic retries on 429/5xx; previously every request paid a fresh TLS handshake (~1s per call).
+- Project metadata is cached for 5 minutes, and the project details and version list are fetched in parallel instead of one after the other.
 
-- Minecraft moved to year-based version numbers in 2026 (`26.1`, `26.2`, `26.3`, ...). Those releases are compiled for Java 25 (class file version 69.0) and refuse to run on Java 21 with `UnsupportedClassVersionError`.
-- The launcher now manages a JRE 25 like any other runtime: one-click download (Eclipse Temurin), `Microsoft.OpenJDK.25` via Winget, and Mojang `java-runtime-epsilon`.
-- Version mapping is now: `MC < 1.17` to Java 8, `1.17 - 1.20.4` to Java 17, `1.20.5 - 1.21.x` to Java 21, `MC >= 26.1` to Java 25. Both numbering schemes are understood, including snapshots such as `26.3-snapshot-10`, `26.3-pre-1`, `26.3-rc-2` and `26w14a`.
-- If the Java path saved in the settings is too old for the selected Minecraft version, the launcher silently switches to a runtime that can run it, and logs which one it picked instead of crashing at startup.
+**Honest cancellation**
 
-**Bug fixes**
+- Background tasks record which stage they are in, so cancelling reports "Đã huỷ (dừng ở bước …)" instead of a vague message — including the case where the work finished after the cancel was requested (reported as cancelled, partial result kept, never as success).
 
-- Fixed `cannot import name 'supporter' from 'sidecar.services'`, which silently disabled the Discord in-game presence (Playing Minecraft with instance name, loader and supporter flair).
-- Fixed `module 'sidecar.core_bridge' has no attribute 'check_java'`: the Java row in System Diagnostics and in bug reports now resolves the real path and version.
-- The crash-log analyzer maps the class file version from the log straight to the Java release to install, including 69 for Java 25.
+**Verifiable Fabric installs**
+
+- The launcher resolves a concrete Fabric loader build before installing, pins it into `instance.json`, and verifies the profile folder actually landed on disk. Launches prefer the pinned profile instead of guessing by sort order, so two Fabric profiles for the same Minecraft version can no longer race.
 
 **Download reliability**
 
-- JRE downloads now use a source chain instead of a single URL: GitHub, then the Tsinghua and CERNET Adoptium mirrors (byte-identical artifacts), then the Microsoft OpenJDK build as a last resort. A short connect timeout makes a blocked host fail over in seconds instead of hanging, and the archive is streamed to disk rather than buffered in memory.
+- Mojang downloads use per-thread keep-alive sessions with a pool sized for the download workers, eliminating the "Connection pool is full" warnings and the per-file TLS handshakes.
+
+**Diagnostics**
+
+- GPU detection gets an 8-second budget instead of 3, caches its result for the process lifetime, and falls back to reading `DriverDesc` straight from the registry — `wmic` no longer ships with Windows 11 24H2.
 
 ---
 
