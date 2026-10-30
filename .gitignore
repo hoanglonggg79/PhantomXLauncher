@@ -8,8 +8,6 @@ credentials.json
 token.json
 client_secret*.json
 
-# Cloudflare Worker source — the admin token sits in plaintext here, so it must
-# never be committed. Use `wrangler secret put ADMIN_SECRET_TOKEN` for deployment.
 worker.js
 wrangler.jsonc
 
@@ -48,8 +46,6 @@ build/
 staging/
 PhantomX-*-win64.zip
 
-# Discord bot của hệ thống supporter — repo riêng, không thuộc launcher.
-# Token nằm trong Bot/tken.txt (Bot/.gitignore cũng tự loại nó).
 Bot/
 
 *.log
@@ -67,9 +63,6 @@ portable.txt
 Thumbs.db
 desktop.ini
 .DS_Store
-
-# WorkBuddy agent workspace — not part of the app
-.workbuddy-ai/
 
 # Wrangler CLI cache (holds account metadata, never belongs in the repo)
 .wrangler/
